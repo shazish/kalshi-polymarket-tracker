@@ -16,8 +16,11 @@ DEFAULT_CONFIG = {
     "spread_max": 3,                # max bid-ask spread in cents
     "min_volume": 50,               # minimum volume as secondary signal
     "price_change_threshold": 3,    # cents — meaningful change vs cache
+    "max_pages": 20,                # max pages to scan per run (rate limit safety)
     "cache_file": os.path.expanduser("~/.hermes/kalshi-tracker/cache/market_cache.json"),
     "candidates_file": os.path.expanduser("~/.hermes/kalshi-tracker/cache/candidates.json"),
+    # Categories to scan — focus on markets where "obvious" outcomes exist
+    "scan_categories": ["Politics", "Economics", "Entertainment", "Weather"],
 }
 
 
@@ -84,7 +87,7 @@ class ScannerAgent:
     # ── Filtering ──────────────────────────────────────────────────
 
     def _passes_filters(self, market):
-        """Apply price threshold + liquidity filters."""
+        """Apply price threshold + liquidity filters + exclude multivariate combos."""
         yes_bid = market.get("yes_bid", 0) or 0
         yes_ask = market.get("yes_ask", 0) or 0
         no_bid = market.get("no_bid", 0) or 0
@@ -109,7 +112,40 @@ class ScannerAgent:
         if volume < self.config["min_volume"]:
             return False
 
+        # Exclude multivariate combo markets (sports multi-leg bets)
+        # These are identified by: no series_ticker AND title contains multiple "yes"/"no" entries
+        if self._is_multivariate_combo(market):
+            return False
+
         return True
+
+    def _is_multivariate_combo(self, market):
+        """
+        Detect multivariate combo markets (sports multi-leg bets).
+        These have no series_ticker and titles with multiple outcome legs.
+        """
+        # If it has a series_ticker, it's a regular market
+        if market.get("series_ticker"):
+            return False
+
+        # Check title for multiple "yes"/"no" entries (comma-separated legs)
+        title = market.get("title", "") or ""
+        yes_count = title.lower().count(",yes ")
+        no_count = title.lower().count(",no ")
+        total_legs = yes_count + no_count
+
+        # If more than 2 legs, it's a combo market
+        if total_legs > 2:
+            return True
+
+        # Also check subtitle
+        subtitle = market.get("subtitle", "") or ""
+        yes_sub = subtitle.lower().count(",yes ")
+        no_sub = subtitle.lower().count(",no ")
+        if yes_sub + no_sub > 2:
+            return True
+
+        return False
 
     def _passes_deep_filters(self, market):
         """Relaxed filters for the daily deep scan."""
@@ -142,21 +178,69 @@ class ScannerAgent:
     # ── Scan modes ─────────────────────────────────────────────────
 
     def full_scan(self):
-        """Fetch all open markets, filter, return candidates."""
+        """Fetch markets from target categories, filter, return candidates."""
         print(f"[Scanner] Starting full scan at {datetime.now(timezone.utc).isoformat()}")
-        all_markets, _ = self.client.get_markets(status="open", limit=100)
-        candidates = []
-        for m in all_markets:
-            ticker = m.get("ticker", "")
-            if self._passes_filters(m):
-                side = self._high_confidence_side(m)
-                candidates.append(self._enrich_candidate(m, side, "full_scan"))
-            self._update_cache(ticker, m)
+        print(f"[Scanner] Target categories: {self.config['scan_categories']}")
+
+        # Build a set of valid series tickers from target categories
+        valid_series = set()
+        try:
+            series_data = self.client._get("/series", {"limit": 20000})
+            all_series = series_data.get("series", [])
+            for s in all_series:
+                if s.get("category") in self.config["scan_categories"]:
+                    valid_series.add(s.get("ticker", ""))
+            print(f"[Scanner] {len(valid_series)} series in target categories (from {len(all_series)} total)")
+        except Exception as e:
+            print(f"[Scanner] Warning: could not build series filter: {e}")
+
+        # Scan all open markets with pagination
+        all_candidates = []
+        markets_scanned = 0
+        cursor = None
+
+        for page in range(self.config["max_pages"]):
+            params = {"status": "open", "limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                data = self.client._get("/markets", params)
+                batch = data.get("markets", [])
+                if not batch:
+                    break
+            except Exception as e:
+                print(f"[Scanner] Market fetch error: {e}")
+                break
+
+            for m in batch:
+                ticker = m.get("ticker", "")
+                markets_scanned += 1
+
+                # Skip if not in a target series (when we have series data)
+                if valid_series:
+                    st = m.get("series_ticker", "")
+                    if st and st not in valid_series:
+                        continue
+                    # Skip markets without series_ticker (multivariate combos)
+                    if not st:
+                        continue
+
+                if self._passes_filters(m):
+                    side = self._high_confidence_side(m)
+                    all_candidates.append(self._enrich_candidate(m, side, "full_scan"))
+                self._update_cache(ticker, m)
+
+            cursor = data.get("cursor")
+            if not cursor:
+                break
+
+            if (page + 1) % 5 == 0:
+                print(f"[Scanner] Progress: {markets_scanned} markets scanned, {len(all_candidates)} candidates")
 
         self.cache["last_full_scan"] = datetime.now(timezone.utc).isoformat()
         self._save_cache()
-        print(f"[Scanner] Full scan complete: {len(candidates)} candidates from {len(all_markets)} markets")
-        return candidates
+        print(f"[Scanner] Full scan complete: {len(all_candidates)} candidates from {markets_scanned} markets")
+        return all_candidates
 
     def deep_scan(self):
         """Daily scan at lower threshold to find overlooked opportunities."""
