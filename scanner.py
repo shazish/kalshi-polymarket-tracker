@@ -11,16 +11,16 @@ from datetime import datetime, timezone
 from kalshi_client import KalshiClient
 
 DEFAULT_CONFIG = {
-    "price_threshold": 85,          # cents — primary filter
-    "deep_scan_threshold": 70,      # cents — secondary daily scan
+    "price_threshold": 90,          # cents — primary filter (high-confidence only)
+    "deep_scan_threshold": 80,      # cents — secondary daily scan (broader net)
     "spread_max": 3,                # max bid-ask spread in cents
     "min_volume": 50,               # minimum volume as secondary signal
     "price_change_threshold": 3,    # cents — meaningful change vs cache
-    "max_pages": 20,                # max pages to scan per run (rate limit safety)
+    "max_pages": 50,                # max event pages per scan (5,000 events)
     "cache_file": os.path.expanduser("~/.hermes/kalshi-tracker/cache/market_cache.json"),
     "candidates_file": os.path.expanduser("~/.hermes/kalshi-tracker/cache/candidates.json"),
-    # Categories to scan — focus on markets where "obvious" outcomes exist
-    "scan_categories": ["Politics", "Economics", "Entertainment", "Weather"],
+    # Categories where "obvious outcome" markets exist
+    "scan_categories": ["Politics", "Economics", "Entertainment", "Weather", "World", "Elections"],
 }
 
 
@@ -178,68 +178,68 @@ class ScannerAgent:
     # ── Scan modes ─────────────────────────────────────────────────
 
     def full_scan(self):
-        """Fetch markets from target categories, filter, return candidates."""
+        """Fetch events with nested markets, filter by category, return candidates."""
         print(f"[Scanner] Starting full scan at {datetime.now(timezone.utc).isoformat()}")
         print(f"[Scanner] Target categories: {self.config['scan_categories']}")
 
-        # Build a set of valid series tickers from target categories
-        valid_series = set()
-        try:
-            series_data = self.client._get("/series", {"limit": 20000})
-            all_series = series_data.get("series", [])
-            for s in all_series:
-                if s.get("category") in self.config["scan_categories"]:
-                    valid_series.add(s.get("ticker", ""))
-            print(f"[Scanner] {len(valid_series)} series in target categories (from {len(all_series)} total)")
-        except Exception as e:
-            print(f"[Scanner] Warning: could not build series filter: {e}")
-
-        # Scan all open markets with pagination
         all_candidates = []
         markets_scanned = 0
+        events_scanned = 0
         cursor = None
 
         for page in range(self.config["max_pages"]):
-            params = {"status": "open", "limit": 100}
+            params = {"status": "open", "limit": 100, "with_nested_markets": "true"}
             if cursor:
                 params["cursor"] = cursor
             try:
-                data = self.client._get("/markets", params)
-                batch = data.get("markets", [])
-                if not batch:
+                data = self.client._get("/events", params)
+                events = data.get("events", [])
+                if not events:
                     break
             except Exception as e:
-                print(f"[Scanner] Market fetch error: {e}")
+                print(f"[Scanner] Event fetch error: {e}")
                 break
 
-            for m in batch:
-                ticker = m.get("ticker", "")
-                markets_scanned += 1
+            for event in events:
+                events_scanned += 1
+                cat = event.get("category", "")
+                if cat not in self.config["scan_categories"]:
+                    continue
 
-                # Skip if not in a target series (when we have series data)
-                if valid_series:
-                    st = m.get("series_ticker", "")
-                    if st and st not in valid_series:
-                        continue
-                    # Skip markets without series_ticker (multivariate combos)
-                    if not st:
+                for m in event.get("markets", []):
+                    markets_scanned += 1
+                    ticker = m.get("ticker", "")
+
+                    # Skip multivariate combo markets (multi-leg sports bets)
+                    # Detected by title containing multiple comma-separated "yes"/"no" legs
+                    title = (m.get("title", "") or "").lower()
+                    comma_legs = [s.strip() for s in title.split(",") if s.strip().startswith(("yes ", "no "))]
+                    if len(comma_legs) > 2:
                         continue
 
-                if self._passes_filters(m):
-                    side = self._high_confidence_side(m)
-                    all_candidates.append(self._enrich_candidate(m, side, "full_scan"))
-                self._update_cache(ticker, m)
+                    # Normalize and filter
+                    normalized = self.client.normalize_market(m)
+                    if self._passes_filters(normalized):
+                        side = self._high_confidence_side(normalized)
+                        candidate = self._enrich_candidate(normalized, side, "full_scan")
+                        # Add event-level info
+                        candidate["event_title"] = event.get("title", "")
+                        candidate["category"] = cat
+                        candidate["event_ticker"] = event.get("event_ticker", "")
+                        candidate["rules_primary"] = m.get("rules_primary", "")
+                        all_candidates.append(candidate)
+                    self._update_cache(ticker, normalized)
 
             cursor = data.get("cursor")
             if not cursor:
                 break
 
-            if (page + 1) % 5 == 0:
-                print(f"[Scanner] Progress: {markets_scanned} markets scanned, {len(all_candidates)} candidates")
+            if (page + 1) % 20 == 0:
+                print(f"[Scanner] Progress: {events_scanned} events, {markets_scanned} markets, {len(all_candidates)} candidates")
 
         self.cache["last_full_scan"] = datetime.now(timezone.utc).isoformat()
         self._save_cache()
-        print(f"[Scanner] Full scan complete: {len(all_candidates)} candidates from {markets_scanned} markets")
+        print(f"[Scanner] Full scan complete: {len(all_candidates)} candidates from {markets_scanned} markets across {events_scanned} events")
         return all_candidates
 
     def deep_scan(self):

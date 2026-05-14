@@ -18,25 +18,40 @@ BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 
 
 class KalshiClient:
-    def __init__(self, max_retries=3, backoff_factor=2):
+    def __init__(self, max_retries=3, backoff_factor=2, min_request_interval=0.15):
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
+        self.min_request_interval = min_request_interval  # seconds between requests
         self.session = requests.Session()
         self.session.headers.update({"Content-Type": "application/json"})
+        self._last_request_time = 0
+
+    def _throttle(self):
+        """Enforce minimum interval between requests."""
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self.min_request_interval:
+            time.sleep(self.min_request_interval - elapsed)
+        self._last_request_time = time.time()
 
     def _get(self, path, params=None):
-        """GET with exponential backoff on 429/5xx."""
+        """GET with exponential backoff on 429/5xx and proactive throttling."""
         url = f"{BASE_URL}{path}"
         for attempt in range(self.max_retries):
+            self._throttle()
             resp = self.session.get(url, params=params, timeout=30)
             if resp.status_code == 429:
-                wait = self.backoff_factor ** (attempt + 1)
-                print(f"[KalshiClient] 429 rate limited, waiting {wait}s...")
+                # Respect Retry-After header if present, else exponential backoff
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after:
+                    wait = float(retry_after)
+                else:
+                    wait = self.backoff_factor ** (attempt + 1)
+                print(f"[KalshiClient] 429 rate limited, waiting {wait:.1f}s...")
                 time.sleep(wait)
                 continue
             if resp.status_code >= 500:
                 wait = self.backoff_factor ** (attempt + 1)
-                print(f"[KalshiClient] {resp.status_code} server error, retrying in {wait}s...")
+                print(f"[KalshiClient] {resp.status_code} server error, retrying in {wait:.1f}s...")
                 time.sleep(wait)
                 continue
             if resp.status_code != 200:
