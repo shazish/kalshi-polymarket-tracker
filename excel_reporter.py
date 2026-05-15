@@ -33,6 +33,8 @@ _C = {
     "unclear":     "FCE4D6",   # orange fill
     "unclear_fg":  "843C0C",
     "anomaly":     "F4CCCC",   # red-tinted
+    "near_miss":   "D9D9D9",   # grey — CERTAIN but failed validation or below threshold
+    "near_miss_fg":"595959",
     "notify":      "D9EAD3",   # light green row tint for opportunities
     "subheader":   "D6E4F7",   # light blue for sub-labels
     "border":      "BFBFBF",
@@ -81,6 +83,8 @@ OPPORTUNITY_COLS = [
     ("Market Price (c)",       14, lambda r: int(r["candidate"].get("implied_probability", 0) or 0)),
     ("Confidence %",           13, lambda r: r["classification"].get("confidence_score", "")),
     ("Classification",         14, lambda r: r["classification"].get("classification", "")),
+    ("Status",                 24, lambda r: r.get("_opportunity_status", r.get("routing", ""))),
+    ("Validation Errors",      40, lambda r: " | ".join(r["classification"].get("_validation_errors", []))),
     ("Edge %",                 10, lambda r: _pct(r.get("edge_after_fees"))),
     ("Ann. Edge %",            10, lambda r: _pct(r.get("annualized_edge"))),
     ("Days to Close",          13, lambda r: r.get("days_to_close", "")),
@@ -169,8 +173,16 @@ def _write_sheet(ws, col_defs, rows, title):
     for row_idx, record in enumerate(rows, start=3):
         cls = record.get("classification", {}).get("classification", "")
         has_anomaly = bool(record.get("candidate", {}).get("volume_anomaly"))
-        row_fill = _fill(_C["anomaly"]) if has_anomaly else _row_fill(cls)
-        row_font = _row_font(cls)
+        is_near_miss = record.get("_is_near_miss", False)
+        if is_near_miss:
+            row_fill = _fill(_C["near_miss"])
+            row_font = _font(color=_C["near_miss_fg"])
+        elif has_anomaly:
+            row_fill = _fill(_C["anomaly"])
+            row_font = _row_font(cls)
+        else:
+            row_fill = _row_fill(cls)
+            row_font = _row_font(cls)
 
         for col_idx, (_, _, extractor) in enumerate(col_defs, start=1):
             try:
@@ -198,12 +210,15 @@ def _write_legend(wb):
     ws = wb.create_sheet("Legend")
     rows = [
         ("Colour", "Meaning"),
-        ("Green (CERTAIN)", "Classifier assessed outcome as near-certain (≥95% confidence, ≥3 confirming signals, no contradicting signals)"),
+        ("Green (CERTAIN)", "Classifier assessed outcome as near-certain (≥95% confidence, ≥3 confirming signals, no contradicting signals). Actionable."),
+        ("Grey (NEAR MISS)", "Classified CERTAIN but filtered — validation errors, edge below 3%, or already notified within 7 days. Review the Validation Errors column."),
         ("Yellow (LIKELY)", "Classifier assessed outcome as probable but not certain"),
         ("Orange (UNCLEAR)", "Classifier could not determine outcome with sufficient confidence"),
         ("Red tint", "Market has a VOLUME ANOMALY — large bets against the high-confidence side. Requires investigation."),
         ("", ""),
         ("Column", "Description"),
+        ("Status", "OPPORTUNITY = actionable; NEAR MISS = CERTAIN but filtered (see Validation Errors)"),
+        ("Validation Errors", "Why a CERTAIN candidate failed structural checks (e.g. fewer than 3 searches logged). Fix by re-running classification with stricter search logging."),
         ("Edge %", "Expected return after Kalshi fees as % of capital deployed"),
         ("Ann. Edge %", "Edge annualised by days to close (365 / days)"),
         ("Suggested Size ($)", "Kelly-criterion position size, capped at 5% of bankroll"),
@@ -224,31 +239,66 @@ def _write_legend(wb):
         ws.row_dimensions[r_idx].height = 18
 
 
+def _extract_near_misses(to_log):
+    """
+    Pull CERTAIN candidates that didn't notify (failed validation or below edge threshold)
+    out of to_log so they can be shown on the Opportunities sheet as near-misses.
+    """
+    near_misses = []
+    for r in to_log:
+        cls = r.get("classification", {})
+        if cls.get("classification") != "CERTAIN":
+            continue
+        routing = r.get("routing", "")
+        if routing in ("skipped_validation_failed", "logged_below_threshold", "skipped_already_notified"):
+            status_labels = {
+                "skipped_validation_failed": "NEAR MISS — validation failed",
+                "logged_below_threshold":    "NEAR MISS — edge below threshold",
+                "skipped_already_notified":  "NEAR MISS — already notified",
+            }
+            copy = dict(r)
+            copy["_is_near_miss"] = True
+            copy["_opportunity_status"] = status_labels.get(routing, routing)
+            near_misses.append(copy)
+    return near_misses
+
+
 def export_excel(to_notify, to_log, output_path):
     """
     Write a two-sheet Excel workbook.
+
+    Opportunities sheet: actionable rows (green) + CERTAIN near-misses (grey).
+    Near-misses are CERTAIN candidates that were filtered by validation errors,
+    edge threshold, or deduplication — shown so the sheet is never misleadingly empty.
 
     Args:
         to_notify: list of opportunity dicts above edge threshold
         to_log:    list of all other classified results
         output_path: .xlsx file path
     """
+    # Tag notify rows with their status
+    for r in to_notify:
+        r["_opportunity_status"] = "OPPORTUNITY"
+        r["_is_near_miss"] = False
+
+    near_misses = _extract_near_misses(to_log)
+    opp_rows = to_notify + near_misses  # notified first, near-misses below
+
     if not OPENPYXL_AVAILABLE:
         _export_csv_fallback(to_notify, to_log, output_path)
         return output_path.replace(".xlsx", ".csv")
 
     wb = openpyxl.Workbook()
 
-    # Sheet 1: Opportunities
+    # Sheet 1: Opportunities (actionable + near-misses)
     ws_opp = wb.active
     ws_opp.title = "Opportunities"
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    _write_sheet(
-        ws_opp,
-        OPPORTUNITY_COLS,
-        to_notify,
-        f"Kalshi Opportunities — {timestamp}  ({len(to_notify)} above threshold)",
+    opp_title = (
+        f"Kalshi Opportunities — {timestamp}  "
+        f"({len(to_notify)} actionable  |  {len(near_misses)} near-miss)"
     )
+    _write_sheet(ws_opp, OPPORTUNITY_COLS, opp_rows, opp_title)
 
     # Sheet 2: All Results
     ws_all = wb.create_sheet("All Results")
