@@ -28,7 +28,7 @@ CLASSIFIED_FILE = os.path.join(SKILL_DIR, "cache", "classified.json")
 
 SCANNER_CONFIG = {
     "price_threshold": 85,
-    "deep_scan_threshold": 70,
+    "deep_scan_threshold": 80,
     "spread_max": 3,
     "min_volume": 50,
     "price_change_threshold": 3,

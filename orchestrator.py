@@ -20,7 +20,7 @@ from backtest_agent import BacktestAgent
 
 DEFAULT_CONFIG = {
     "price_threshold": 85,
-    "deep_scan_threshold": 70,
+    "deep_scan_threshold": 80,
     "spread_max": 3,
     "min_volume": 50,
     "price_change_threshold": 3,

@@ -3,7 +3,7 @@
 
 # ── Scanner ──────────────────────────────────────────────────────
 price_threshold: 85                # Primary filter: markets with yes_bid or no_bid >= this (cents)
-deep_scan_threshold: 70            # Deep scan: relaxed threshold for daily scan
+deep_scan_threshold: 80            # Deep scan: relaxed threshold for daily scan
 spread_max: 3                      # Max bid-ask spread on high-confidence side (cents)
 min_volume: 50                     # Minimum volume (secondary signal)
 price_change_threshold: 3          # Cents — meaningful change vs cache to re-trigger classification
