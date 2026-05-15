@@ -189,23 +189,48 @@ class ScannerAgent:
         return False
 
     def _passes_deep_filters(self, market):
-        """Relaxed filters for the daily deep scan."""
+        """
+        Relaxed price threshold for the daily deep scan.
+        All other guards (combo, volume, date window) are the same as _passes_filters.
+        """
         yes_bid = market.get("yes_bid", 0) or 0
         no_bid = market.get("no_bid", 0) or 0
         yes_ask = market.get("yes_ask", 0) or 0
         no_ask = market.get("no_ask", 0) or 0
+        volume = market.get("volume", 0) or 0
 
-        price_ok = (yes_bid >= self.config["deep_scan_threshold"] or
-                    no_bid >= self.config["deep_scan_threshold"])
-        if not price_ok:
+        if not (yes_bid >= self.config["deep_scan_threshold"] or
+                no_bid >= self.config["deep_scan_threshold"]):
             return False
 
-        # Still require reasonable spread
+        # Spread: more lenient than primary (2× max)
         if yes_bid >= no_bid:
             spread = (yes_ask - yes_bid) if yes_ask and yes_bid else 999
         else:
             spread = (no_ask - no_bid) if no_ask and no_bid else 999
-        if spread > self.config["spread_max"] * 2:  # more lenient
+        if spread > self.config["spread_max"] * 2:
+            return False
+
+        # Volume — same threshold as primary
+        if volume < self.config["min_volume"]:
+            return False
+
+        # Date window — same as primary
+        close_dt_str = market.get("close_date")
+        if close_dt_str:
+            try:
+                from datetime import timedelta
+                close_dt = datetime.fromisoformat(close_dt_str.replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                if not (now <= close_dt <= now + timedelta(days=365)):
+                    return False
+            except Exception:
+                return False
+        else:
+            return False
+
+        # Combo markets — same exclusion as primary
+        if self._is_multivariate_combo(market):
             return False
 
         return True
@@ -280,20 +305,64 @@ class ScannerAgent:
         return all_candidates
 
     def deep_scan(self):
-        """Daily scan at lower threshold to find overlooked opportunities."""
+        """
+        Daily scan at a lower price threshold to catch markets the primary filter missed.
+
+        Uses the same events-based approach as full_scan (category-filtered, combo-excluded)
+        but applies _passes_deep_filters instead of _passes_filters. Only yields markets
+        that pass deep but NOT primary — avoiding duplicates with the full scan.
+        """
         print(f"[Scanner] Starting deep scan at {datetime.now(timezone.utc).isoformat()}")
-        all_markets, _ = self.client.get_markets(status="open", limit=100)
+        print(f"[Scanner] Deep threshold: {self.config['deep_scan_threshold']}c | categories: {self.config['scan_categories']}")
+
         candidates = []
-        for m in all_markets:
-            ticker = m.get("ticker", "")
-            # Only include markets the primary filter missed
-            if not self._passes_filters(m) and self._passes_deep_filters(m):
-                side = self._high_confidence_side(m)
-                candidates.append(self._enrich_candidate(m, side, "deep_scan"))
-            self._update_cache(ticker, m)
+        markets_scanned = 0
+        events_scanned = 0
+        cursor = None
+
+        for page in range(self.config["max_pages"]):
+            params = {"status": "open", "limit": 100, "with_nested_markets": "true"}
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                data = self.client._get("/events", params)
+                events = data.get("events", [])
+                if not events:
+                    break
+            except Exception as e:
+                print(f"[Scanner] Deep scan event fetch error: {e}")
+                break
+
+            for event in events:
+                events_scanned += 1
+                cat = event.get("category", "")
+                if cat not in self.config["scan_categories"]:
+                    continue
+
+                for m in event.get("markets", []):
+                    markets_scanned += 1
+                    ticker = m.get("ticker", "")
+
+                    title = (m.get("title", "") or "").lower()
+                    comma_legs = [s.strip() for s in title.split(",") if s.strip().startswith(("yes ", "no "))]
+                    if len(comma_legs) > 2:
+                        continue
+
+                    normalized = self.client.normalize_market(m)
+                    # Only capture markets the primary filter missed
+                    if not self._passes_filters(normalized) and self._passes_deep_filters(normalized):
+                        side = self._high_confidence_side(normalized)
+                        candidate = self._enrich_candidate(normalized, side, "deep_scan", event=event)
+                        candidate["rules_primary"] = m.get("rules_primary", "")
+                        candidates.append(candidate)
+                    self._update_cache(ticker, normalized, category=cat)
+
+            cursor = data.get("cursor")
+            if not cursor:
+                break
 
         self._save_cache()
-        print(f"[Scanner] Deep scan complete: {len(candidates)} deep candidates")
+        print(f"[Scanner] Deep scan complete: {len(candidates)} candidates from {markets_scanned} markets across {events_scanned} events")
         return candidates
 
     def incremental_scan(self):
