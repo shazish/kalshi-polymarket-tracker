@@ -73,10 +73,38 @@ def _apply(cell, **kwargs):
         setattr(cell, attr, val)
 
 
+# ── URL helpers ──────────────────────────────────────────────────────────────
+
+def _market_url(r):
+    """Return the web URL for the market on Kalshi or Polymarket."""
+    candidate = r.get("candidate", r)
+    platform = candidate.get("platform", "Kalshi")
+    if platform == "Polymarket":
+        url = candidate.get("settlement_source_url", "")
+        if not url:
+            slug = candidate.get("slug", "")
+            url = f"https://polymarket.com/event/{slug}" if slug else ""
+        return url
+    else:
+        event_ticker = candidate.get("event_ticker", "") or candidate.get("ticker", "")
+        return f"https://kalshi.com/markets/{event_ticker.lower()}" if event_ticker else ""
+
+
+def _ticker_cell(r):
+    """Return a HYPERLINK formula so the Ticker cell links to the market page."""
+    ticker = r["candidate"].get("ticker", "")
+    url = _market_url(r)
+    if url:
+        safe_url = url.replace('"', "%22")
+        safe_ticker = ticker.replace('"', "'")
+        return f'=HYPERLINK("{safe_url}","{safe_ticker}")'
+    return ticker
+
+
 # ── Column definitions ───────────────────────────────────────────────────────
 
 OPPORTUNITY_COLS = [
-    ("Ticker",                 20, lambda r: r["candidate"].get("ticker", "")),
+    ("Ticker",                 20, _ticker_cell),
     ("Title",                  45, lambda r: r["candidate"].get("title", "")),
     ("Category",               14, lambda r: r["candidate"].get("category", "")),
     ("Side",                    6, lambda r: r["classification"].get("high_confidence_side", "")),
@@ -324,14 +352,19 @@ def _export_csv_fallback(to_notify, to_log, xlsx_path):
     """Write a plain CSV when openpyxl is not installed."""
     csv_path = xlsx_path.replace(".xlsx", ".csv")
     all_rows = to_notify + to_log
-    headers = [c[0] for c in OPPORTUNITY_COLS]
+    # Use plain ticker for CSV (no formulas), append Market URL as extra column
+    csv_cols = [
+        ("Ticker", lambda r: r["candidate"].get("ticker", "")),
+        *[(c[0], c[2]) for c in OPPORTUNITY_COLS[1:]],
+        ("Market URL", _market_url),
+    ]
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(headers)
+        writer.writerow([c[0] for c in csv_cols])
         for record in all_rows:
             row = []
-            for _, _, extractor in OPPORTUNITY_COLS:
+            for _, extractor in csv_cols:
                 try:
                     row.append(extractor(record))
                 except Exception:

@@ -9,9 +9,11 @@ Both share the same output schema and validate_classification() rules so the
 Opportunity Manager can handle them identically downstream.
 """
 
-# ── System prompts ────────────────────────────────────────────────────────────
+# ── System prompt builders ────────────────────────────────────────────────────
 
-CLASSIFIER_SYSTEM_PROMPT = """You are a Kalshi market classifier. Your job is to determine whether a binary outcome on Kalshi is an almost-certainty (CERTAIN), genuinely uncertain (LIKELY), or impossible to determine (UNCLEAR).
+def get_classifier_system_prompt(recency_days: int = 14) -> str:
+    """Return the regular classifier system prompt with the given recency window."""
+    return f"""You are a Kalshi market classifier. Your job is to determine whether a binary outcome on Kalshi is an almost-certainty (CERTAIN), genuinely uncertain (LIKELY), or impossible to determine (UNCLEAR).
 
 CRITICAL RULES:
 1. You MUST perform at least 3 web searches BEFORE classifying. Searching is not optional — it is mandatory.
@@ -26,24 +28,24 @@ CRITICAL RULES:
 Output MUST be valid JSON matching the schema below. Do not output anything else.
 
 OUTPUT SCHEMA:
-{
+{{
   "classification": "CERTAIN | LIKELY | UNCLEAR",
   "confidence_score": <0-100>,
   "high_confidence_side": "YES | NO",
   "reasons": ["reason 1", "reason 2", "reason 3"],
   "confirming_signals": [
-    {"fact": "...", "source_url": "..."},
-    {"fact": "...", "source_url": "..."},
-    {"fact": "...", "source_url": "..."}
+    {{"fact": "...", "source_url": "..."}},
+    {{"fact": "...", "source_url": "..."}},
+    {{"fact": "...", "source_url": "..."}}
   ],
   "contradicting_signals": [
-    {"fact": "...", "source_url": "..."}
+    {{"fact": "...", "source_url": "..."}}
   ],
   "what_would_change_this": "Description of what scenario or evidence would make you wrong",
   "settlement_risk": "Any scenario where the obvious outcome could settle incorrectly, or empty string if none",
-  "recent_developments": "What your recency search found — any news in the past 2 weeks relevant to this outcome. Write 'None found' only if the recency search returned nothing relevant.",
+  "recent_developments": "What your recency search found — any news in the past {recency_days} days relevant to this outcome. Write 'None found' only if the recency search returned nothing relevant.",
   "searched_for": ["query 1", "query 2", "query 3 (recency search)"]
-}
+}}
 
 VALIDATION RULES (enforced after your output):
 - classification == "CERTAIN" requires len(reasons) >= 3
@@ -57,7 +59,13 @@ VALIDATION RULES (enforced after your output):
 If any validation fails, the market will be downgraded to LIKELY."""
 
 
-ANOMALY_CLASSIFIER_SYSTEM_PROMPT = """You are a Kalshi market analyst specialising in detecting mispricings via volume signals.
+# Backward-compatible constants (default 14-day window)
+CLASSIFIER_SYSTEM_PROMPT = get_classifier_system_prompt()
+
+
+def get_anomaly_classifier_system_prompt(recency_days: int = 14) -> str:
+    """Return the anomaly classifier system prompt with the given recency window."""
+    return f"""You are a Kalshi market analyst specialising in detecting mispricings via volume signals.
 
 A market has been flagged because it has unusually large capital deployed on the high-confidence side despite its price being well below the typical certainty threshold. Your job is NOT to ask "is this outcome obvious?" — the market is saying it isn't obvious yet. Your job is to ask: "Is the market WRONG? Is the smart money right?"
 
@@ -83,22 +91,22 @@ CRITICAL RULES:
 Output MUST be valid JSON matching the same schema as the regular classifier. Do not output anything else.
 
 OUTPUT SCHEMA:
-{
+{{
   "classification": "CERTAIN | LIKELY | UNCLEAR",
   "confidence_score": <0-100>,
   "high_confidence_side": "YES | NO",
   "reasons": ["reason 1", "reason 2", "reason 3"],
   "confirming_signals": [
-    {"fact": "...", "source_url": "..."}
+    {{"fact": "...", "source_url": "..."}}
   ],
   "contradicting_signals": [
-    {"fact": "...", "source_url": "..."}
+    {{"fact": "...", "source_url": "..."}}
   ],
   "what_would_change_this": "Description of what scenario or evidence would make you wrong",
   "settlement_risk": "Any scenario where the obvious outcome could settle incorrectly, or empty string if none",
-  "recent_developments": "What your recency search found — any news in the past 2 weeks relevant to this market. Write 'None found' only if the recency search returned nothing relevant.",
+  "recent_developments": "What your recency search found — any news in the past {recency_days} days relevant to this market. Write 'None found' only if the recency search returned nothing relevant.",
   "searched_for": ["query 1", "query 2", "query 3 (recency search)"]
-}
+}}
 
 VALIDATION RULES (same as regular classifier — enforced after your output):
 - classification == "CERTAIN" requires len(reasons) >= 3
@@ -112,9 +120,13 @@ VALIDATION RULES (same as regular classifier — enforced after your output):
 If any validation fails, the market will be downgraded to LIKELY."""
 
 
+# Backward-compatible constant (default 14-day window)
+ANOMALY_CLASSIFIER_SYSTEM_PROMPT = get_anomaly_classifier_system_prompt()
+
+
 # ── Prompt builders ───────────────────────────────────────────────────────────
 
-def build_regular_prompt(candidate):
+def build_regular_prompt(candidate, recency_days: int = 14):
     """
     Build the classifier prompt for a price-filter candidate (ScannerAgent output).
     Question: is this already-high-priced outcome actually near-certain?
@@ -169,14 +181,14 @@ SETTLEMENT SOURCE: {candidate.get('settlement_source_url', 'N/A')}{rules_section
 Instructions:
 1. Perform at least 3 web searches before classifying.
 2. Search A: current real-world status of this event.
-3. Search B (MANDATORY recency): "[topic] news [current month year]" — you must explicitly search for recent developments.
+3. Search B (MANDATORY recency): "[topic] news [current month year]" — search for developments in the past {recency_days} days.
 4. Search C: settlement criteria / how Kalshi will resolve this market.
 5. Read SETTLEMENT RULES carefully — Kalshi's criteria can differ from the real-world outcome.
 6. Classify whether the {side} outcome is certain, likely, or unclear.
 7. Output the structured JSON as specified."""
 
 
-def build_anomaly_prompt(candidate):
+def build_anomaly_prompt(candidate, recency_days: int = 14):
     """
     Build the classifier prompt for a volume-anomaly candidate (AnomalyScanner output).
     Question: is the smart money accumulation a genuine mispricing signal?
@@ -223,7 +235,7 @@ Your investigation questions:
 
 Instructions:
 1. Search A: current real-world status of this event — ground truth.
-2. Search B (MANDATORY recency): "[topic] news [current month year]" — volume often front-runs news.
+2. Search B (MANDATORY recency): "[topic] news [current month year]" — search for developments in the past {recency_days} days.
 3. Search C: any catalyst, announcement, or structural reason justifying the {side} accumulation.
 4. Classify: is the market mispriced (CERTAIN), probably fair (LIKELY), or unclear (UNCLEAR)?
 5. Output the structured JSON as specified."""

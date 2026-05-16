@@ -30,12 +30,14 @@ SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
 
 from classifier import (
-    CLASSIFIER_SYSTEM_PROMPT,
-    ANOMALY_CLASSIFIER_SYSTEM_PROMPT,
+    get_classifier_system_prompt,
+    get_anomaly_classifier_system_prompt,
     build_regular_prompt,
     build_anomaly_prompt,
     validate_classification,
 )
+
+RECENCY_DAYS = int(os.environ.get("KALSHI_RECENCY_DAYS", 14))
 
 CANDIDATES_FILE = os.path.join(SKILL_DIR, "cache", "candidates.json")
 ANOMALY_CANDIDATES_FILE = os.path.join(SKILL_DIR, "cache", "anomaly_candidates.json")
@@ -118,10 +120,11 @@ def run_pm_scan(mode):
 
 # ── Output helpers ────────────────────────────────────────────────────────────
 
-def _print_candidates(candidates, system_prompt, prompt_builder, classified_file):
+def _print_candidates(candidates, system_prompt_fn, prompt_builder, classified_file, recency_days=14):
     """Print system prompt + per-candidate prompts + agent instructions."""
+    system_prompt = system_prompt_fn(recency_days)
     print("\n" + "=" * 60)
-    print("CLASSIFIER SYSTEM PROMPT (follow exactly):")
+    print(f"CLASSIFIER SYSTEM PROMPT (follow exactly) — recency window: {recency_days} days:")
     print("=" * 60)
     print(system_prompt)
 
@@ -130,7 +133,7 @@ def _print_candidates(candidates, system_prompt, prompt_builder, classified_file
     print("=" * 60)
     for i, candidate in enumerate(candidates, 1):
         print(f"\n--- CANDIDATE {i}/{len(candidates)}: {candidate.get('ticker', '?')} ---")
-        print(prompt_builder(candidate))
+        print(prompt_builder(candidate, recency_days))
 
     print("\n" + "=" * 60)
     print("AGENT INSTRUCTIONS:")
@@ -178,7 +181,7 @@ def print_price_scan(mode):
         print("No candidates. Done.")
         sys.exit(0)
 
-    _print_candidates(candidates, CLASSIFIER_SYSTEM_PROMPT, build_regular_prompt, CLASSIFIED_FILE)
+    _print_candidates(candidates, get_classifier_system_prompt, build_regular_prompt, CLASSIFIED_FILE, RECENCY_DAYS)
 
 
 def print_anomaly_scan():
@@ -208,9 +211,10 @@ def print_anomaly_scan():
 
     _print_candidates(
         candidates,
-        ANOMALY_CLASSIFIER_SYSTEM_PROMPT,
+        get_anomaly_classifier_system_prompt,
         build_anomaly_prompt,
         CLASSIFIED_FILE,
+        RECENCY_DAYS,
     )
 
 
@@ -239,13 +243,13 @@ def print_pm_scan(mode):
             )
         if len(candidates) > 10:
             print(f"  ... and {len(candidates) - 10} more")
-        system_prompt = ANOMALY_CLASSIFIER_SYSTEM_PROMPT
+        system_prompt_fn = get_anomaly_classifier_system_prompt
         prompt_builder = build_anomaly_prompt
     else:
-        system_prompt = CLASSIFIER_SYSTEM_PROMPT
+        system_prompt_fn = get_classifier_system_prompt
         prompt_builder = build_regular_prompt
 
-    _print_candidates(candidates, system_prompt, prompt_builder, CLASSIFIED_FILE)
+    _print_candidates(candidates, system_prompt_fn, prompt_builder, CLASSIFIED_FILE, RECENCY_DAYS)
 
 
 # ── Finalize ──────────────────────────────────────────────────────────────────

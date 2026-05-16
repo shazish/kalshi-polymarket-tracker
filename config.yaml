@@ -8,6 +8,10 @@ spread_max: 3                      # Max bid-ask spread on high-confidence side 
 min_volume: 50                     # Minimum volume (secondary signal)
 price_change_threshold: 3          # Cents — meaningful change vs cache to re-trigger classification
 
+# ── Classifier ─────────────────────────────────────────────────
+recency_days: 14                   # Freshness window for the mandatory recency search (days)
+                                   # Override: KALSHI_RECENCY_DAYS env var
+
 # ── Opportunity Manager ─────────────────────────────────────────
 min_edge_after_fees: 0.03          # Minimum edge after fees to send notification (3%)
 max_bankroll_pct: 0.05             # Max 5% of bankroll per opportunity
