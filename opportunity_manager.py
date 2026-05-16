@@ -215,8 +215,14 @@ class OpportunityManager:
         if ann is not None and days is not None:
             edge_str += f"  ({ann * 100:.0f}% ann, {days}d to close)"
 
+        platform = c.get("platform", "Kalshi")
+        currency = c.get("settlement_currency", "USD")
+        platform_tag = f"{platform} [{currency}]" if currency != "USD" else platform
+        if currency != "USD":
+            platform_tag += " ⚠ requires USDC wallet on Polygon"
+
         lines = [
-            f"KALSHI OPPORTUNITY: {side} @ {prob}c",
+            f"{platform_tag.upper()} OPPORTUNITY: {side} @ {prob}c",
             f"Title: {c.get('title', 'N/A')}",
             f"Ticker: {c.get('ticker', 'N/A')}",
             f"Edge after fees: {edge_str}",

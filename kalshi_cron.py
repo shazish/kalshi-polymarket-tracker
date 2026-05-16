@@ -2,18 +2,24 @@
 """
 kalshi_cron.py — Entry point for Hermes cron jobs.
 
-Modes:
-  incremental  — Hourly scan; outputs candidates + agent instructions
-  full         — Daily full scan; outputs candidates + agent instructions
-  deep         — Deep scan at relaxed threshold; outputs candidates + agent instructions
-  anomaly      — Volume-first scan; finds below-threshold markets with smart money signals
-  finalize     — Run opportunity manager on classified.json; print notifications
+Modes — Kalshi (USD):
+  incremental    — Hourly price-change scan
+  full           — Daily full scan
+  deep           — Daily scan at relaxed threshold (80c)
+  anomaly        — Volume-first scan; below-threshold markets with smart money signals
+
+Modes — Polymarket (USDC, crypto wallet required):
+  pm-incremental — Hourly price-change scan
+  pm-full        — Daily full scan
+  pm-deep        — Daily scan at relaxed threshold (80c)
+  pm-anomaly     — Volume-first scan; same smart money logic as Kalshi anomaly
+
+Finalize (both platforms share classified.json):
+  finalize       — Run opportunity manager on classified.json; export Excel report
 
 Usage:
-  python3 kalshi_cron.py incremental
-  python3 kalshi_cron.py full
-  python3 kalshi_cron.py deep
-  python3 kalshi_cron.py anomaly
+  python3 kalshi_cron.py [incremental|full|deep|anomaly]
+  python3 kalshi_cron.py [pm-incremental|pm-full|pm-deep|pm-anomaly]
   python3 kalshi_cron.py finalize
 """
 import json
@@ -54,6 +60,18 @@ ANOMALY_CONFIG = {
     "cache_file": os.path.join(SKILL_DIR, "cache", "anomaly_cache.json"),
 }
 
+PM_SCANNER_CONFIG = {
+    "price_threshold":      85,
+    "deep_scan_threshold":  80,
+    "spread_max":           5,
+    "min_volume":           1000,   # USDC
+    "anomaly_min_price":    20,
+    "anomaly_max_price":    79,
+    "min_implied_hc_dollars": 10000,
+    "candidates_file":      os.path.join(SKILL_DIR, "cache", "pm_candidates.json"),
+    "cache_file":           os.path.join(SKILL_DIR, "cache", "pm_cache.json"),
+}
+
 
 # ── Scan runners ──────────────────────────────────────────────────────────────
 
@@ -77,6 +95,22 @@ def run_anomaly_scan():
     from anomaly_scanner import AnomalyScanner
     scanner = AnomalyScanner(ANOMALY_CONFIG)
     candidates = scanner.scan()
+    if candidates:
+        scanner.save_candidates(candidates)
+    return candidates or []
+
+
+def run_pm_scan(mode):
+    """Run PolymarketScanner in the given mode and return candidates."""
+    from polymarket_scanner import PolymarketScanner
+    scanner = PolymarketScanner(PM_SCANNER_CONFIG)
+    scan_fn = {
+        "pm-incremental": scanner.incremental_scan,
+        "pm-full":        scanner.full_scan,
+        "pm-deep":        scanner.deep_scan,
+        "pm-anomaly":     scanner.anomaly_scan,
+    }[mode]
+    candidates = scan_fn()
     if candidates:
         scanner.save_candidates(candidates)
     return candidates or []
@@ -180,6 +214,40 @@ def print_anomaly_scan():
     )
 
 
+def print_pm_scan(mode):
+    """Run a Polymarket scan and print classification instructions."""
+    is_anomaly = mode == "pm-anomaly"
+    print(f"[kalshi_cron] Running {mode} scan (Polymarket — USDC settlement)...")
+    candidates = run_pm_scan(mode)
+    print(f"[kalshi_cron] PolymarketScanner found {len(candidates)} candidates")
+
+    if not candidates:
+        print("No candidates. Done.")
+        sys.exit(0)
+
+    if is_anomaly:
+        print("\n" + "=" * 60)
+        print("POLYMARKET ANOMALY SUMMARY (sorted by implied HC capital):")
+        print("=" * 60)
+        for c in candidates[:10]:
+            ev = c.get("anomaly_evidence", {})
+            print(
+                f"  {c['ticker']:40s} {c['high_confidence_side']}@{c['implied_probability']}c  "
+                f"~${ev.get('implied_hc_dollars', 0):>8,} USDC HC  "
+                f"ratio={ev.get('hc_to_opp_ratio', 0):.1f}×  "
+                f"close={str(c.get('close_date', ''))[:10]}"
+            )
+        if len(candidates) > 10:
+            print(f"  ... and {len(candidates) - 10} more")
+        system_prompt = ANOMALY_CLASSIFIER_SYSTEM_PROMPT
+        prompt_builder = build_anomaly_prompt
+    else:
+        system_prompt = CLASSIFIER_SYSTEM_PROMPT
+        prompt_builder = build_regular_prompt
+
+    _print_candidates(candidates, system_prompt, prompt_builder, CLASSIFIED_FILE)
+
+
 # ── Finalize ──────────────────────────────────────────────────────────────────
 
 def finalize():
@@ -228,7 +296,11 @@ if __name__ == "__main__":
         print_anomaly_scan()
     elif mode in ("incremental", "full", "deep"):
         print_price_scan(mode)
+    elif mode in ("pm-incremental", "pm-full", "pm-deep", "pm-anomaly"):
+        print_pm_scan(mode)
     else:
         print(f"Unknown mode: {mode}")
-        print("Usage: python3 kalshi_cron.py [incremental|full|deep|anomaly|finalize]")
+        print("Usage: python3 kalshi_cron.py [incremental|full|deep|anomaly]")
+        print("                              [pm-incremental|pm-full|pm-deep|pm-anomaly]")
+        print("                              [finalize]")
         sys.exit(1)
