@@ -116,6 +116,7 @@ OPPORTUNITY_COLS = [
     ("Edge %",                 10, lambda r: _pct(r.get("edge_after_fees"))),
     ("Ann. Edge %",            10, lambda r: _pct(r.get("annualized_edge"))),
     ("Days to Close",          13, lambda r: r.get("days_to_close", "")),
+    ("Urgency Score",          13, lambda r: r["candidate"].get("urgency_score", "")),
     ("Close Date",             12, lambda r: _date(r["candidate"].get("close_date", ""))),
     ("Suggested Size ($)",     16, lambda r: r.get("position_size_usd", "")),
     ("Volume",                 12, lambda r: int(r["candidate"].get("volume", 0) or 0)),

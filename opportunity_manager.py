@@ -10,7 +10,8 @@ import os
 from datetime import datetime, timezone
 
 DEFAULT_CONFIG = {
-    "min_edge_after_fees": 0.03,     # 3% minimum edge to notify
+    "min_edge_after_fees": 0.03,     # 3% minimum edge to notify (baseline for 30-day market)
+    "min_edge_annualized": 0.15,     # 15% annualized edge minimum — time-adjusted threshold
     "max_bankroll_pct": 0.05,        # max 5% of bankroll per opportunity
     "default_bankroll": 1000.0,      # default bankroll in dollars
     "fee_rate": 0.015,               # ~1.5% average Kalshi fee (quadratic model)
@@ -178,8 +179,15 @@ class OpportunityManager:
                 to_log.append(opportunity)
                 continue
 
-            # Edge threshold check
-            if edge >= self.config["min_edge_after_fees"]:
+            # Edge threshold check — time-adjusted
+            # A 2% edge over 2 days (annualized ~365%) is better than 3% over 180 days (~6% ann).
+            # Use the higher of: raw edge >= min_edge_after_fees OR annualized edge >= min_edge_annualized.
+            min_edge = self.config["min_edge_after_fees"]
+            min_annualized = self.config["min_edge_annualized"]
+            passes_raw = edge >= min_edge
+            passes_annualized = (annualized_edge is not None and annualized_edge >= min_annualized)
+
+            if passes_raw or passes_annualized:
                 opportunity["routing"] = "notify"
                 to_notify.append(opportunity)
                 self._mark_notified(ticker, side)
@@ -215,6 +223,7 @@ class OpportunityManager:
         if ann is not None and days is not None:
             edge_str += f"  ({ann * 100:.0f}% ann, {days}d to close)"
 
+        urgency = c.get("urgency_score")
         platform = c.get("platform", "Kalshi")
         currency = c.get("settlement_currency", "USD")
         platform_tag = f"{platform} [{currency}]" if currency != "USD" else platform
@@ -227,7 +236,8 @@ class OpportunityManager:
             f"Ticker: {c.get('ticker', 'N/A')}",
             f"Edge after fees: {edge_str}",
             f"Suggested size: ${size:.0f}",
-            f"Close date: {c.get('close_date', 'N/A')}",
+            f"Close date: {c.get('close_date', 'N/A')} ({days}d)",
+            f"Urgency score: {urgency:.0f}/100" if urgency is not None else "Urgency score: N/A",
             f"Confidence: {cl.get('confidence_score', 'N/A')}%",
             f"Reasons:",
         ]

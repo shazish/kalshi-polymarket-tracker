@@ -339,6 +339,8 @@ class ScannerAgent:
         self.cache["last_full_scan"] = datetime.now(timezone.utc).isoformat()
         self._prune_cache()
         self._save_cache()
+        # Sort by urgency score descending — most actionable first
+        all_candidates.sort(key=lambda c: c.get("urgency_score", 0), reverse=True)
         print(f"[Scanner] Full scan complete: {len(all_candidates)} candidates from {markets_scanned} markets across {events_scanned} events")
         return all_candidates
 
@@ -400,6 +402,8 @@ class ScannerAgent:
                 break
 
         self._save_cache()
+        # Sort by urgency score descending — most actionable first
+        candidates.sort(key=lambda c: c.get("urgency_score", 0), reverse=True)
         print(f"[Scanner] Deep scan complete: {len(candidates)} candidates from {markets_scanned} markets across {events_scanned} events")
         return candidates
 
@@ -461,6 +465,49 @@ class ScannerAgent:
         print(f"[Scanner] Incremental scan complete: {len(candidates)} candidates from {pages_fetched} pages")
         return candidates
 
+    def _compute_days_to_close(self, close_date_str):
+        """Return days until close, minimum 1. Returns None if unparseable."""
+        if not close_date_str:
+            return None
+        try:
+            close_dt = datetime.fromisoformat(close_date_str.replace("Z", "+00:00"))
+            delta = (close_dt - datetime.now(timezone.utc)).days
+            return max(1, delta)
+        except Exception:
+            return None
+
+    def _compute_urgency_score(self, days_to_close, implied_prob, volume):
+        """
+        Composite urgency score: higher = more actionable.
+
+        Logic:
+        - Shorter time-to-close → higher urgency (exponential decay)
+        - Higher implied probability → higher urgency (more confident signal)
+        - Higher volume → higher urgency (more liquidity = easier to enter/exit)
+
+        Score range: roughly 0-100. Used to rank candidates before classification
+        so the LLM sees the most time-sensitive opportunities first.
+
+        The time component dominates: a market closing tomorrow with 90c is
+        more urgent than one closing in 6 months at 95c.
+        """
+        import math
+
+        # Time component: exponential decay, half-life ~30 days
+        # 1 day → ~1.0, 7 days → ~0.85, 30 days → ~0.5, 90 days → ~0.12, 365 days → ~0.0003
+        time_score = math.exp(-0.023 * days_to_close) if days_to_close else 0.1
+
+        # Probability component: linear 0-1 (implied_prob is in cents, e.g. 90)
+        prob_score = min(implied_prob, 100) / 100.0
+
+        # Volume component: log scale, caps at 1.0 for very liquid markets
+        # 100 vol → 0.5, 1K → 0.75, 10K → 1.0
+        vol_score = min(math.log10(max(volume, 1)) / 4.0, 1.0)
+
+        # Weighted composite: time 50%, probability 30%, volume 20%
+        composite = 0.50 * time_score + 0.30 * prob_score + 0.20 * vol_score
+        return round(composite * 100, 2)
+
     def _enrich_candidate(self, market, side, scan_type, event=None):
         """
         Build a candidate dict with all info the Classifier needs.
@@ -479,6 +526,11 @@ class ScannerAgent:
         elif event is None:
             event = {}
 
+        close_date = market.get("close_date") or event.get("strike_date", "")
+        days_to_close = self._compute_days_to_close(close_date)
+        implied_prob = self._implied_prob(market, side)
+        volume = market.get("volume", 0) or 0
+
         return {
             "ticker": market.get("ticker", ""),
             "title": market.get("title", "") or event.get("title", ""),
@@ -490,10 +542,11 @@ class ScannerAgent:
             "yes_ask": market.get("yes_ask"),
             "no_bid": market.get("no_bid"),
             "no_ask": market.get("no_ask"),
-            "volume": market.get("volume"),
+            "volume": volume,
             "open_interest": market.get("open_interest"),
             "status": market.get("status"),
-            "close_date": market.get("close_date") or event.get("strike_date", ""),
+            "close_date": close_date,
+            "days_to_close": days_to_close,
             "settlement_source_url": (
                 market.get("settlement_source_url", "") or
                 event.get("settlement_source_url", "") or
@@ -501,8 +554,9 @@ class ScannerAgent:
             ),
             "rules_primary": market.get("rules_primary", "") or event.get("rules_primary", ""),
             "high_confidence_side": side,
-            "implied_probability": self._implied_prob(market, side),
+            "implied_probability": implied_prob,
             "volume_anomaly": self._detect_volume_anomaly(market, side),
+            "urgency_score": self._compute_urgency_score(days_to_close, implied_prob, volume),
             "scan_type": scan_type,
             "scanned_at": datetime.now(timezone.utc).isoformat(),
         }

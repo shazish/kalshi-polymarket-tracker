@@ -25,6 +25,20 @@ CRITICAL RULES:
 7. If ANY contradicting signal exists, you MUST downgrade from CERTAIN to LIKELY.
 8. Always consider settlement risk: could Kalshi's settlement mechanism rule differently than expected?
 
+TIME-TO-RESOLUTION FACTOR:
+The candidate prompt includes a `DAYS TO CLOSE` field. Use this to adjust your certainty threshold:
+- Markets closing within 7 days: Easier to classify as CERTAIN. Very little time for unexpected developments. If current reality strongly favors the outcome and no near-term catalyst exists, CERTAIN is appropriate.
+- Markets closing in 8-30 days: Standard threshold. Apply normal scrutiny.
+- Markets closing in 31-90 days: Harder to classify as CERTAIN. More time means more black swan risk, policy changes, or new information. Require stronger evidence.
+- Markets closing in 91-365 days: Very difficult to classify as CERTAIN. Only structural impossibilities qualify (e.g., acquired company cannot IPO, mathematical certainty). Downgrade to LIKELY unless truly inescapable.
+- Markets closing in 365+ days: Almost never CERTAIN unless logical/mathematical impossibility.
+
+This time adjustment is especially important for:
+- Political outcomes (elections, legislation, appointments): far-horizon markets are inherently unpredictable
+- IPO / corporate action markets: timelines shift constantly, even near-term ones carry risk
+- Economic indicators (unemployment, GDP, CPI): only near-term prints with known data can be CERTAIN
+- Sports: only CERTAIN for games happening within days with confirmed results
+
 Output MUST be valid JSON matching the schema below. Do not output anything else.
 
 OUTPUT SCHEMA:
@@ -43,7 +57,7 @@ OUTPUT SCHEMA:
   ],
   "what_would_change_this": "Description of what scenario or evidence would make you wrong",
   "settlement_risk": "Any scenario where the obvious outcome could settle incorrectly, or empty string if none",
-  "recent_developments": "What your recency search found — any news in the past {recency_days} days relevant to this outcome. Write 'None found' only if the recency search returned nothing relevant.",
+  "recent_developments": "What your recency search found -- any news in the past {recency_days} days relevant to this outcome. Write 'None found' only if the recency search returned nothing relevant.",
   "searched_for": ["query 1", "query 2", "query 3 (recency search)"]
 }}
 
@@ -82,11 +96,12 @@ CLASSIFICATION MEANING (different from regular classifier):
 
 CRITICAL RULES:
 1. You MUST perform at least 3 web searches BEFORE classifying.
-2. Search 1: Current real-world status of the event — what is the ground truth?
-3. Search 2: Recent news (MANDATORY recency) — "[topic] news [current month year]". Volume often front-runs public news.
+2. Search 1: Current real-world status of the event -- what is the ground truth?
+3. Search 2: Recent news (MANDATORY recency) -- "[topic] news [current month year]". Volume often front-runs public news.
 4. Search 3+: Why might someone have large conviction here? Settlement criteria, upcoming catalysts.
 5. If the volume is explainable by hedging, market-making, or a known public event, say so in contradicting_signals and downgrade to LIKELY/UNCLEAR.
 6. If you cannot find ANY reason to justify the accumulation, treat "unexplained smart money" as a mild confirming signal, not a red flag.
+7. Factor in the DAYS TO CLOSE: near-term anomalies (< 14 days) with high volume are stronger signals than far-horizon ones. Smart money is more likely to be informed about imminent events.
 
 Output MUST be valid JSON matching the same schema as the regular classifier. Do not output anything else.
 
@@ -175,17 +190,27 @@ CURRENT PRICES: Yes bid={candidate.get('yes_bid')}c ask={candidate.get('yes_ask'
 VOLUME: {candidate.get('volume', 'N/A')}
 OPEN INTEREST: {candidate.get('open_interest', 'N/A')}
 CLOSE DATE: {candidate.get('close_date', 'N/A')}
+DAYS TO CLOSE: {candidate.get('days_to_close', 'N/A')}
+URGENCY SCORE: {candidate.get('urgency_score', 'N/A')}/100
 
 SETTLEMENT SOURCE: {candidate.get('settlement_source_url', 'N/A')}{rules_section}{anomaly_section}
+
+IMPORTANT: Use the DAYS TO CLOSE value to calibrate your certainty threshold.
+- <= 7 days: Easier to classify as CERTAIN (little time for surprises)
+- 8-30 days: Standard scrutiny
+- 31-90 days: Harder to classify as CERTAIN (more black swan risk)
+- 91-365 days: Only structural impossibilities are CERTAIN
+- 365+ days: Almost never CERTAIN unless logical/mathematical impossibility
 
 Instructions:
 1. Perform at least 3 web searches before classifying.
 2. Search A: current real-world status of this event.
-3. Search B (MANDATORY recency): "[topic] news [current month year]" — search for developments in the past {recency_days} days.
+3. Search B (MANDATORY recency): "[topic] news [current month year]" -- search for developments in the past {recency_days} days.
 4. Search C: settlement criteria / how Kalshi will resolve this market.
-5. Read SETTLEMENT RULES carefully — Kalshi's criteria can differ from the real-world outcome.
-6. Classify whether the {side} outcome is certain, likely, or unclear.
-7. Output the structured JSON as specified."""
+5. Read SETTLEMENT RULES carefully -- Kalshi's criteria can differ from the real-world outcome.
+6. Consider the time-to-resolution when choosing your classification.
+7. Classify whether the {side} outcome is certain, likely, or unclear.
+8. Output the structured JSON as specified."""
 
 
 def build_anomaly_prompt(candidate, recency_days: int = 14):
@@ -212,17 +237,18 @@ SUBTITLE: {candidate.get('subtitle', 'N/A')}
 EVENT TICKER: {candidate.get('event_ticker', 'N/A')}
 MARKET TICKER: {candidate.get('ticker', 'N/A')}
 
-HIGH-CONFIDENCE SIDE: {side} @ {prob}c  ← this is BELOW the normal certainty threshold
+HIGH-CONFIDENCE SIDE: {side} @ {prob}c  <-- this is BELOW the normal certainty threshold
 CURRENT PRICES: Yes bid={candidate.get('yes_bid')}c ask={candidate.get('yes_ask', 'N/A')}c | No bid={candidate.get('no_bid')}c ask={candidate.get('no_ask', 'N/A')}c
 VOLUME: {total_vol:,}
 OPEN INTEREST: {candidate.get('open_interest', 'N/A')}
 CLOSE DATE: {candidate.get('close_date', 'N/A')}
+DAYS TO CLOSE: {candidate.get('days_to_close', 'N/A')}
 
 ANOMALY SIGNAL:
   Implied $ on {side} (high-confidence): ~${implied_hc:,}
   Implied $ on opposite side:            ~${implied_opp:,}
-  Ratio (HC / opposite):                 {ratio}×
-  This means roughly {ratio}× more capital is on the {side} side than the opposite.
+  Ratio (HC / opposite):                 {ratio}x
+  This means roughly {ratio}x more capital is on the {side} side than the opposite.
 
 SETTLEMENT SOURCE: {candidate.get('settlement_source_url', 'N/A')}{rules_section}
 
@@ -231,11 +257,12 @@ Your investigation questions:
 2. Has there been a recent development (announcement, data release, court ruling) that justifies this?
 3. Is the current price of {prob}c understating the true probability? What should the price be?
 4. Could the volume be explained by hedging, market-making, or a known public event? (If yes, it weakens the signal.)
-5. What is the settlement criteria — does the real-world outcome cleanly trigger a {side} resolution?
+5. What is the settlement criteria -- does the real-world outcome cleanly trigger a {side} resolution?
+6. Consider the {candidate.get('days_to_close', 'N/A')}-day time horizon -- is the smart money accounting for near-term catalysts the market is missing?
 
 Instructions:
-1. Search A: current real-world status of this event — ground truth.
-2. Search B (MANDATORY recency): "[topic] news [current month year]" — search for developments in the past {recency_days} days.
+1. Search A: current real-world status of this event -- ground truth.
+2. Search B (MANDATORY recency): "[topic] news [current month year]" -- search for developments in the past {recency_days} days.
 3. Search C: any catalyst, announcement, or structural reason justifying the {side} accumulation.
 4. Classify: is the market mispriced (CERTAIN), probably fair (LIKELY), or unclear (UNCLEAR)?
 5. Output the structured JSON as specified."""
