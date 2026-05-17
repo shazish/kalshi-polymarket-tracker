@@ -36,6 +36,7 @@ from classifier import (
     build_anomaly_prompt,
     validate_classification,
 )
+from market_clusterer import cluster_candidates, format_cluster_context, cluster_stats
 
 RECENCY_DAYS = int(os.environ.get("KALSHI_RECENCY_DAYS", 14))
 
@@ -122,6 +123,18 @@ def run_pm_scan(mode):
 
 def _print_candidates(candidates, system_prompt_fn, prompt_builder, classified_file, recency_days=14):
     """Print system prompt + per-candidate prompts + agent instructions."""
+    primaries, cluster_map = cluster_candidates(candidates)
+    print(f"\n[Clustering] {cluster_stats(candidates, primaries)}")
+
+    import json, os
+    map_path = os.path.join(SKILL_DIR, "cache", "cluster_map.json")
+    os.makedirs(os.path.dirname(map_path), exist_ok=True)
+    with open(map_path, "w") as f:
+        json.dump(
+            {pk: [c.get("ticker") for c in group] for pk, group in cluster_map.items()},
+            f, indent=2,
+        )
+
     system_prompt = system_prompt_fn(recency_days)
     print("\n" + "=" * 60)
     print(f"CLASSIFIER SYSTEM PROMPT (follow exactly) — recency window: {recency_days} days:")
@@ -129,21 +142,26 @@ def _print_candidates(candidates, system_prompt_fn, prompt_builder, classified_f
     print(system_prompt)
 
     print("\n" + "=" * 60)
-    print(f"CANDIDATES TO CLASSIFY ({len(candidates)} total):")
+    print(f"CANDIDATES TO CLASSIFY ({len(primaries)} primaries, {len(candidates)} total):")
     print("=" * 60)
-    for i, candidate in enumerate(candidates, 1):
-        print(f"\n--- CANDIDATE {i}/{len(candidates)}: {candidate.get('ticker', '?')} ---")
+    for i, candidate in enumerate(primaries, 1):
+        print(f"\n--- CANDIDATE {i}/{len(primaries)}: {candidate.get('ticker', '?')} ---")
         print(prompt_builder(candidate, recency_days))
+        ctx = format_cluster_context(candidate)
+        if ctx:
+            print(ctx)
 
     print("\n" + "=" * 60)
     print("AGENT INSTRUCTIONS:")
     print("=" * 60)
     print(f"""
 STEP 1 — Classify each candidate:
-  For EACH candidate above:
+  For EACH of the {len(primaries)} primary candidates above:
     a. Perform >=3 web searches (current status, recency news, settlement criteria)
     b. Classify per the system prompt and output schema above
     c. Validation rules are enforced by the system prompt — follow them
+    d. If a CLUSTER CONTEXT section is present, factor sibling market prices into
+       your reasoning — inconsistent pricing across siblings is a contradicting signal
 
 STEP 2 — Devil's advocate pass (CERTAIN candidates only):
   For each candidate you classified as CERTAIN, run a second check:
