@@ -115,6 +115,7 @@ OPPORTUNITY_COLS = [
     ("Validation Errors",      40, lambda r: " | ".join(r["classification"].get("_validation_errors", []))),
     ("Edge %",                 10, lambda r: _pct(r.get("edge_after_fees"))),
     ("Ann. Edge %",            10, lambda r: _pct(r.get("annualized_edge"))),
+    ("Fee Rate",               10, lambda r: _pct(r.get("fee_rate_used"))),
     ("Days to Close",          13, lambda r: r.get("days_to_close", "")),
     ("Urgency Score",          13, lambda r: r["candidate"].get("urgency_score", "")),
     ("Close Date",             12, lambda r: _date(r["candidate"].get("close_date", ""))),
