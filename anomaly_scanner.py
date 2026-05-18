@@ -13,6 +13,7 @@ Anomaly types produced:
                              market whose price doesn't yet reflect that conviction.
 """
 import json
+import math
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -68,7 +69,11 @@ class AnomalyScanner:
 
     @staticmethod
     def _is_multivariate_combo(market):
-        """Exclude multi-leg sports combo markets (same logic as ScannerAgent)."""
+        """Exclude multi-leg combo markets."""
+        # Ticker prefix is the most reliable signal for known combo families
+        ticker = market.get("ticker", "") or ""
+        if "COMBO" in ticker.upper():
+            return True
         if market.get("series_ticker"):
             return False
         title = market.get("title", "") or ""
@@ -167,6 +172,26 @@ class AnomalyScanner:
     def _enrich_candidate(self, market, event, anomaly_evidence):
         """Build candidate dict for an anomaly market."""
         side = anomaly_evidence["high_confidence_side"]
+        close_date = market.get("close_date") or event.get("strike_date", "")
+        volume = float(market.get("volume") or 0)
+        hc_price = anomaly_evidence["hc_price"]
+
+        # Days to close (clamped to 1 minimum for active markets)
+        days_to_close = None
+        if close_date:
+            try:
+                close_dt = datetime.fromisoformat(close_date.replace("Z", "+00:00"))
+                delta = (close_dt - datetime.now(timezone.utc)).days
+                days_to_close = max(1, delta)
+            except Exception:
+                pass
+
+        # Urgency score (same formula as ScannerAgent)
+        time_score = math.exp(-0.023 * days_to_close) if days_to_close else 0.1
+        prob_score = min(hc_price, 100) / 100.0
+        vol_score = min(math.log10(max(volume, 1)) / 4.0, 1.0)
+        urgency_score = round((0.50 * time_score + 0.30 * prob_score + 0.20 * vol_score) * 100, 2)
+
         return {
             "ticker": market.get("ticker", ""),
             "title": market.get("title", "") or event.get("title", ""),
@@ -181,14 +206,18 @@ class AnomalyScanner:
             "volume": market.get("volume"),
             "open_interest": market.get("open_interest"),
             "status": market.get("status"),
-            "close_date": market.get("close_date") or event.get("strike_date", ""),
+            "close_date": close_date,
+            "days_to_close": days_to_close,
+            "urgency_score": urgency_score,
+            "platform": "Kalshi",
+            "settlement_currency": "USD",
             "settlement_source_url": (
                 market.get("settlement_source_url", "")
                 or event.get("settlement_source_url", "")
             ),
             "rules_primary": market.get("rules_primary", "") or event.get("rules_primary", ""),
             "high_confidence_side": side,
-            "implied_probability": anomaly_evidence["hc_price"],
+            "implied_probability": hc_price,
             "anomaly_evidence": anomaly_evidence,
             "volume_anomaly": None,  # not applicable — opposite signal type
             "candidate_type": "anomaly",
@@ -229,8 +258,9 @@ class AnomalyScanner:
                 if cat not in self.config["scan_categories"]:
                     continue
 
-                for m in event.get("markets", []):
+                for raw_m in event.get("markets", []):
                     markets_checked += 1
+                    m = self.client.normalize_market(raw_m)
                     ticker = m.get("ticker", "")
                     evidence = self._qualifies(m)
                     self._update_cache(ticker, m, category=cat)
