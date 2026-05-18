@@ -31,9 +31,9 @@ _METRIC_PATTERNS = [
 
 # ── System prompt builders ────────────────────────────────────────────────────
 
-def get_classifier_system_prompt(recency_days: int = 14) -> str:
+def get_classifier_system_prompt(recency_days: int = 14, platform: str = "Kalshi") -> str:
     """Return the regular classifier system prompt with the given recency window."""
-    return f"""You are a Kalshi market classifier. Your job is to determine whether a binary outcome on Kalshi is an almost-certainty (CERTAIN), genuinely uncertain (LIKELY), or impossible to determine (UNCLEAR).
+    return f"""You are a {platform} market classifier. Your job is to determine whether a binary outcome on {platform} is an almost-certainty (CERTAIN), genuinely uncertain (LIKELY), or impossible to determine (UNCLEAR).
 
 CRITICAL RULES:
 1. You MUST perform at least 3 web searches BEFORE classifying. Searching is not optional — it is mandatory.
@@ -43,7 +43,7 @@ CRITICAL RULES:
 5. Look for CONFIRMING signals (facts that support the high-confidence side) and CONTRADICTING signals (facts that argue against it).
 6. Classify as CERTAIN only when the outcome is a near-mathematical certainty based on current real-world knowledge.
 7. If ANY contradicting signal exists, you MUST downgrade from CERTAIN to LIKELY.
-8. Always consider settlement risk: could Kalshi's settlement mechanism rule differently than expected?
+8. Always consider settlement risk: could {platform}'s settlement mechanism rule differently than expected?
 
 METRIC VERIFICATION (mandatory for economic/data-driven markets):
 - The candidate prompt includes a SETTLEMENT METRIC field extracted from the settlement rules.
@@ -109,9 +109,9 @@ If any validation fails, the market will be downgraded to LIKELY."""
 CLASSIFIER_SYSTEM_PROMPT = get_classifier_system_prompt()
 
 
-def get_anomaly_classifier_system_prompt(recency_days: int = 14) -> str:
+def get_anomaly_classifier_system_prompt(recency_days: int = 14, platform: str = "Kalshi") -> str:
     """Return the anomaly classifier system prompt with the given recency window."""
-    return f"""You are a Kalshi market analyst specialising in detecting mispricings via volume signals.
+    return f"""You are a {platform} market analyst specialising in detecting mispricings via volume signals.
 
 A market has been flagged because it has unusually large capital deployed on the high-confidence side despite its price being well below the typical certainty threshold. Your job is NOT to ask "is this outcome obvious?" — the market is saying it isn't obvious yet. Your job is to ask: "Is the market WRONG? Is the smart money right?"
 
@@ -217,6 +217,7 @@ def extract_settlement_metric(rules: str) -> str:
         "all previously published data",
         "previously published data",
         "data up to that time",
+        "latest provided data",
         "information available",
         "latest available",
         "official results",
@@ -276,7 +277,8 @@ def build_regular_prompt(candidate, recency_days: int = 14):
     settlement_metric = extract_settlement_metric(rules)
     metric_section = f"\nSETTLEMENT METRIC: {settlement_metric}" if settlement_metric else ""
 
-    return f"""Classify this Kalshi market:
+    platform = candidate.get("platform", "Kalshi")
+    return f"""Classify this {platform} market:
 
 TITLE: {candidate.get('title', 'N/A')}
 SUBTITLE: {candidate.get('subtitle', 'N/A')}
@@ -307,8 +309,8 @@ Instructions:
 1. Perform at least 3 web searches before classifying.
 2. Search A: current real-world status of this event.
 3. Search B (MANDATORY recency): "[topic] news [current month year]" -- search for developments in the past {recency_days} days.
-4. Search C: settlement criteria / how Kalshi will resolve this market.
-5. Read SETTLEMENT RULES carefully -- Kalshi's criteria can differ from the real-world outcome.
+4. Search C: settlement criteria / how {platform} will resolve this market.
+5. Read SETTLEMENT RULES carefully -- {platform}'s criteria can differ from the real-world outcome.
 6. Consider the time-to-resolution when choosing your classification.
 7. Classify whether the {side} outcome is certain, likely, or unclear.
 8. Output the structured JSON as specified."""
@@ -333,7 +335,8 @@ def build_anomaly_prompt(candidate, recency_days: int = 14):
     settlement_metric = extract_settlement_metric(rules)
     metric_section = f"\nSETTLEMENT METRIC: {settlement_metric}" if settlement_metric else ""
 
-    return f"""Investigate this Kalshi VOLUME ANOMALY:
+    platform = candidate.get("platform", "Kalshi")
+    return f"""Investigate this {platform} VOLUME ANOMALY:
 
 TITLE: {candidate.get('title', 'N/A')}
 SUBTITLE: {candidate.get('subtitle', 'N/A')}

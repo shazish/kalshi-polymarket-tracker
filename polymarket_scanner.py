@@ -102,6 +102,15 @@ class PolymarketScanner:
         except Exception:
             return False
 
+        # Skip resolved/closed markets (Polymarket marks these before their close_date)
+        if market.get("status") != "open":
+            return False
+
+        # Skip illiquid markets — wide spread means edge calculations use wrong entry price
+        spread = (market.get("yes_ask", 0) or 0) - (market.get("yes_bid", 0) or 0)
+        if spread > self.config["spread_max"]:
+            return False
+
         # Skip markets where category was not mappable (None = excluded category)
         if market.get("category") is None:
             return False

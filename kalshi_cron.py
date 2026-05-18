@@ -261,10 +261,10 @@ def print_pm_scan(mode):
             )
         if len(candidates) > 10:
             print(f"  ... and {len(candidates) - 10} more")
-        system_prompt_fn = get_anomaly_classifier_system_prompt
+        system_prompt_fn = lambda days: get_anomaly_classifier_system_prompt(days, platform="Polymarket")
         prompt_builder = build_anomaly_prompt
     else:
-        system_prompt_fn = get_classifier_system_prompt
+        system_prompt_fn = lambda days: get_classifier_system_prompt(days, platform="Polymarket")
         prompt_builder = build_regular_prompt
 
     _print_candidates(candidates, system_prompt_fn, prompt_builder, CLASSIFIED_FILE, RECENCY_DAYS)
@@ -283,7 +283,8 @@ def finalize():
 
     for cm in classified:
         if "classification" in cm and isinstance(cm["classification"], dict):
-            cm["classification"] = validate_classification(cm["classification"])
+            candidate_rules = cm.get("candidate", {}).get("rules_primary", "")
+            cm["classification"] = validate_classification(cm["classification"], rules=candidate_rules)
 
     from opportunity_manager import OpportunityManager
     from excel_reporter import export_excel
