@@ -130,8 +130,14 @@ class PolymarketClient:
         cat_raw = raw.get("category") or (event or {}).get("category") or ""
         category = CATEGORY_MAP.get(cat_raw, cat_raw)
 
-        slug = raw.get("slug", "")
-        market_url = f"https://polymarket.com/event/{slug}" if slug else ""
+        # Use the event slug for the URL — individual market slugs (e.g.
+        # "will-japan-gdp-growth-in-q1-2026-be-between-0pt3-and-0pt1") are NOT
+        # valid /event/ paths and return 404. The event slug (e.g.
+        # "japan-gdp-growth-in-q1-2026") is the correct navigable URL.
+        event_slug = (event or {}).get("slug", "")
+        market_slug = raw.get("slug", "")
+        url_slug = event_slug if event_slug else market_slug
+        market_url = f"https://polymarket.com/event/{url_slug}" if url_slug else ""
 
         return {
             "ticker":               f"PM-{raw.get('id', '')}",
@@ -153,7 +159,7 @@ class PolymarketClient:
             "platform":             "Polymarket",
             "settlement_currency":  "USDC",
             "raw_id":               raw.get("id", ""),
-            "slug":                 slug,
+            "slug":                 url_slug,
         }
 
     @staticmethod
