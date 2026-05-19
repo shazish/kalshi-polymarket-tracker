@@ -86,8 +86,8 @@ def _market_url(r):
             url = f"https://polymarket.com/event/{slug}" if slug else ""
         return url
     else:
-        event_ticker = candidate.get("event_ticker", "") or candidate.get("ticker", "")
-        return f"https://kalshi.com/markets/{event_ticker.lower()}" if event_ticker else ""
+        series_ticker = candidate.get("series_ticker", "") or candidate.get("event_ticker", "")
+        return f"https://kalshi.com/markets/{series_ticker.lower()}" if series_ticker else ""
 
 
 def _ticker_cell(r):
