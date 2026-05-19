@@ -124,9 +124,11 @@ class OpportunityManager:
 
         For Kalshi: Kelly fraction = EV / net_profit_on_win
           where net_profit_on_win = (1 - market_price) * (1 - fee_rate)
+          cost_basis = market_price
 
         For Polymarket: Kelly fraction = EV / net_profit_on_win
           where net_profit_on_win = (1 - market_price) - market_price * fee_rate
+          cost_basis = market_price + market_price * fee_rate (matches compute_edge denominator)
         """
         if fee_rate is None:
             if platform == "Polymarket":
@@ -148,7 +150,12 @@ class OpportunityManager:
         if net_profit_on_win <= 0:
             return 0.0
 
-        kelly = edge * market_price / net_profit_on_win
+        # Use the same cost basis as compute_edge() to correctly recover EV
+        if platform == "Polymarket" and fee_rate:
+            cost_basis = market_price + market_price * fee_rate
+        else:
+            cost_basis = market_price
+        kelly = edge * cost_basis / net_profit_on_win
         capped = min(max(kelly, 0.0), self.config["max_bankroll_pct"])
         return round(capped * self.config["default_bankroll"], 2)
 

@@ -107,7 +107,13 @@ class PolymarketScanner:
             return False
 
         # Skip illiquid markets — wide spread means edge calculations use wrong entry price
-        spread = (market.get("yes_ask", 0) or 0) - (market.get("yes_bid", 0) or 0)
+        # Check the high-confidence side's spread (NO-side markets need no_ask/no_bid)
+        yes_bid = market.get("yes_bid", 0) or 0
+        no_bid = market.get("no_bid", 0) or 0
+        if yes_bid >= no_bid:
+            spread = (market.get("yes_ask", 0) or 0) - yes_bid
+        else:
+            spread = (market.get("no_ask", 0) or 0) - (market.get("no_bid", 0) or 0)
         if spread > self.config["spread_max"]:
             return False
 
@@ -358,7 +364,12 @@ class PolymarketScanner:
                         continue
 
                     # Skip illiquid markets — wide spread means entry cost ≠ displayed price
-                    spread = float(m.get("yes_ask", 0) or 0) - float(m.get("yes_bid", 0) or 0)
+                    yes_bid = float(m.get("yes_bid", 0) or 0)
+                    no_bid = float(m.get("no_bid", 0) or 0)
+                    if yes_bid >= no_bid:
+                        spread = float(m.get("yes_ask", 0) or 0) - yes_bid
+                    else:
+                        spread = float(m.get("no_ask", 0) or 0) - no_bid
                     if spread > self.config["anomaly_spread_max"]:
                         continue
 
