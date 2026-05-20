@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "kalshi-tracker"
+version = "1.0.0"
+description = "Multi-agent pipeline for finding high-certainty bets on Kalshi and Polymarket prediction markets"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{name = "shazish"}]
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-xdist",
+]
+
+[tool.setuptools]
+py-modules = []

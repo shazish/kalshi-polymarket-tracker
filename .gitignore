@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Runtime artifacts
+cache/
+logs/
+backtests/
+*.db
+*.db-shm
+*.db-wal
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Video rendering
+kalshi-video/media/
+kalshi-video/venv/
+kalshi-video/frames/
+kalshi-video/frames_v2/
+kalshi-video/concat.txt
+kalshi-video/final.mp4
+
+# Plans (not part of the project)
+plans/

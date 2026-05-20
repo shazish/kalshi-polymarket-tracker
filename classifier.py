@@ -478,8 +478,8 @@ def _extract_metric_keywords(rules: str) -> list:
 if __name__ == "__main__":
     import json, os
     for label, path in [
-        ("regular", "~/.hermes/kalshi-tracker/cache/candidates.json"),
-        ("anomaly", "~/.hermes/kalshi-tracker/cache/anomaly_candidates.json"),
+        ("regular", "./cache/candidates.json"),
+        ("anomaly", "./cache/anomaly_candidates.json"),
     ]:
         full_path = os.path.expanduser(path)
         if os.path.exists(full_path):
