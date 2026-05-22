@@ -21,7 +21,7 @@ DEFAULT_CONFIG = {
     "cache_file": os.path.expanduser("~/.hermes/kalshi-tracker/cache/market_cache.json"),
     "candidates_file": os.path.expanduser("~/.hermes/kalshi-tracker/cache/candidates.json"),
     # Categories where "obvious outcome" markets exist
-    "scan_categories": ["Politics", "Economics", "Entertainment", "Weather", "World", "Elections"],
+    "scan_categories": ["Politics", "Economics", "Entertainment", "Weather", "World", "Elections", "Health", "Finance"],
     # Volume anomaly: flag when implied $ on the opposite (longshot) side exceeds this
     "volume_anomaly_threshold": 5000,
 }

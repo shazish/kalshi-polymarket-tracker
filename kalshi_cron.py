@@ -30,13 +30,9 @@ SKILL_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SKILL_DIR)
 
 from classifier import (
-    get_classifier_system_prompt,
-    get_anomaly_classifier_system_prompt,
-    build_regular_prompt,
-    build_anomaly_prompt,
     validate_classification,
 )
-from market_clusterer import cluster_candidates, format_cluster_context, cluster_stats
+from market_clusterer import cluster_candidates, cluster_stats
 
 RECENCY_DAYS = int(os.environ.get("KALSHI_RECENCY_DAYS", 14))
 
@@ -121,76 +117,55 @@ def run_pm_scan(mode):
 
 # ── Output helpers ────────────────────────────────────────────────────────────
 
-def _print_candidates(candidates, system_prompt_fn, prompt_builder, classified_file, recency_days=14):
-    """Print system prompt + per-candidate prompts + agent instructions."""
-    primaries, cluster_map = cluster_candidates(candidates)
+def _print_two_phase_instructions(candidates, candidates_file, is_anomaly=False):
+    """Print two-phase classification instructions instead of old per-candidate prompts."""
+    primaries, _ = cluster_candidates(candidates)
     print(f"\n[Clustering] {cluster_stats(candidates, primaries)}")
+    print(f"\n{'='*60}")
+    print(f"SCAN COMPLETE — {len(candidates)} candidates ({len(primaries)} primaries)")
+    print(f"File: {candidates_file}")
+    print(f"{'='*60}")
 
-    import json, os
-    map_path = os.path.join(SKILL_DIR, "cache", "cluster_map.json")
-    os.makedirs(os.path.dirname(map_path), exist_ok=True)
-    with open(map_path, "w") as f:
-        json.dump(
-            {pk: [c.get("ticker") for c in group] for pk, group in cluster_map.items()},
-            f, indent=2,
-        )
+    if is_anomaly:
+        print("\nTop anomaly signals by implied HC capital:")
+        from operator import itemgetter
+        sorted_c = sorted(candidates, key=lambda c: c.get('anomaly_evidence',{}).get('implied_hc_dollars',0), reverse=True)
+        for c in sorted_c[:5]:
+            ev = c.get('anomaly_evidence', {})
+            print(f"  {c['ticker'][:40]:40s} {c['high_confidence_side']}@{c['implied_probability']}c  ${ev.get('implied_hc_dollars',0):>8,} HC  ratio={ev.get('hc_to_opp_ratio',0):.1f}x")
+        if len(sorted_c) > 5:
+            print(f"  ... and {len(sorted_c) - 5} more")
 
-    system_prompt = system_prompt_fn(recency_days)
-    print("\n" + "=" * 60)
-    print(f"CLASSIFIER SYSTEM PROMPT (follow exactly) — recency window: {recency_days} days:")
-    print("=" * 60)
-    print(system_prompt)
-
-    print("\n" + "=" * 60)
-    print(f"CANDIDATES TO CLASSIFY ({len(primaries)} primaries, {len(candidates)} total):")
-    print("=" * 60)
-    for i, candidate in enumerate(primaries, 1):
-        print(f"\n--- CANDIDATE {i}/{len(primaries)}: {candidate.get('ticker', '?')} ---")
-        print(prompt_builder(candidate, recency_days))
-        ctx = format_cluster_context(candidate)
-        if ctx:
-            print(ctx)
-
-    print("\n" + "=" * 60)
-    print("AGENT INSTRUCTIONS:")
-    print("=" * 60)
+    print(f"\n{'='*60}")
+    print("TWO-PHASE CLASSIFICATION INSTRUCTIONS:")
+    print(f"{'='*60}")
     print(f"""
-STEP 1 — Classify each candidate:
-  For EACH of the {len(primaries)} primary candidates above:
-    a. Perform >=3 web searches (current status, recency news, settlement criteria)
-    b. Classify per the system prompt and output schema above
-    c. Validation rules are enforced by the system prompt — follow them
-    d. If a CLUSTER CONTEXT section is present, factor sibling market prices into
-       your reasoning — inconsistent pricing across siblings is a contradicting signal
+Phase 1 — RESEARCH (3× parallel Owl Alpha subagents):
+  Read the candidates file at cache/{candidates_file.split('/')[-1]}.
+  Split candidates into 3 batches.
+  Use delegate_task(tasks=[...]) with 3 parallel Owl Alpha subagents.
+  Set model to {{"model": "openrouter/owl-alpha", "provider": "openrouter"}} per task.
+  Each subagent saves to cache/research_batch{{N}}.json.
+  Give them the file path and tell them: "Research only. Do NOT classify."
 
-STEP 2 — Devil's advocate pass (CERTAIN candidates only):
-  For each candidate you classified as CERTAIN, run a second check:
-    Ask yourself: "What is the strongest possible argument that the opposite side wins?"
-    Consider: any recent news, edge cases in the settlement rules, low-probability
-    but non-zero scenarios, or ambiguity in how Kalshi might resolve this.
+Phase 2 — REASONING (3× parallel DeepSeek subagents):
+  Read cache/research_batch0.json, research_batch1.json, research_batch2.json.
+  Use delegate_task with 3 parallel DeepSeek subagents to classify based on research.
+  Set model to {{"model": "deepseek/deepseek-v4-flash", "provider": "nous"}} per task.
+  Each subagent reads its research file and produces classifications using
+  validate_classification() from classifier.py.
+  DO NOT use a pattern-matching script — classify based on research evidence only.
+  Save to cache/results_batch{{N}}.json.
 
-  If you can construct a COHERENT argument (2+ substantive sentences with real-world
-  grounding, not just hypotheticals), you MUST:
-    - Downgrade the classification from CERTAIN to LIKELY
-    - Add the argument as an entry in contradicting_signals with source_url if applicable
-    - Lower confidence_score to reflect the genuine uncertainty
-
-  If no coherent argument exists, keep CERTAIN as-is.
-
-STEP 3 — Save and finalize:
-  Save ALL results to: {classified_file}
-  Format — JSON array where each item is:
-    {{
-      "candidate": {{...the original candidate data shown above...}},
-      "classification": {{...your JSON classification output...}}
-    }}
-
-  Then run: python3 {__file__} finalize
+Merge & Finalize:
+  1. Merge results_batch0/1/2.json into cache/classified.json
+  2. Run: python3 {__file__} finalize
+  3. Also produce a CSV: cache/classified.json → logs/kalshi_{{timestamp}}.csv
 """)
 
 
 def print_price_scan(mode):
-    """Run a price-filter scan and print classification instructions."""
+    """Run a price-filter scan and print two-phase classification instructions."""
     print(f"[kalshi_cron] Running {mode} scan...")
     candidates = run_price_scan(mode)
     print(f"[kalshi_cron] Scanner found {len(candidates)} candidates")
@@ -199,11 +174,11 @@ def print_price_scan(mode):
         print("No candidates. Done.")
         sys.exit(0)
 
-    _print_candidates(candidates, get_classifier_system_prompt, build_regular_prompt, CLASSIFIED_FILE, RECENCY_DAYS)
+    _print_two_phase_instructions(candidates, CANDIDATES_FILE)
 
 
 def print_anomaly_scan():
-    """Run the anomaly scan and print investigation instructions."""
+    """Run the anomaly scan and print two-phase classification instructions."""
     print("[kalshi_cron] Running anomaly scan...")
     candidates = run_anomaly_scan()
     print(f"[kalshi_cron] AnomalyScanner found {len(candidates)} candidates")
@@ -212,32 +187,11 @@ def print_anomaly_scan():
         print("No anomaly candidates. Done.")
         sys.exit(0)
 
-    # Show a brief summary before the full prompts
-    print("\n" + "=" * 60)
-    print("ANOMALY SCAN SUMMARY (sorted by implied HC capital):")
-    print("=" * 60)
-    for c in candidates[:10]:
-        ev = c.get("anomaly_evidence", {})
-        print(
-            f"  {c['ticker']:40s} {c['high_confidence_side']}@{c['implied_probability']}c  "
-            f"~${ev.get('implied_hc_dollars', 0):>8,} HC  "
-            f"ratio={ev.get('hc_to_opp_ratio', 0):.1f}×  "
-            f"close={str(c.get('close_date', ''))[:10]}"
-        )
-    if len(candidates) > 10:
-        print(f"  ... and {len(candidates) - 10} more")
-
-    _print_candidates(
-        candidates,
-        get_anomaly_classifier_system_prompt,
-        build_anomaly_prompt,
-        CLASSIFIED_FILE,
-        RECENCY_DAYS,
-    )
+    _print_two_phase_instructions(candidates, ANOMALY_CANDIDATES_FILE, is_anomaly=True)
 
 
 def print_pm_scan(mode):
-    """Run a Polymarket scan and print classification instructions."""
+    """Run a Polymarket scan and print two-phase classification instructions."""
     is_anomaly = mode == "pm-anomaly"
     print(f"[kalshi_cron] Running {mode} scan (Polymarket — USDC settlement)...")
     candidates = run_pm_scan(mode)
@@ -247,27 +201,7 @@ def print_pm_scan(mode):
         print("No candidates. Done.")
         sys.exit(0)
 
-    if is_anomaly:
-        print("\n" + "=" * 60)
-        print("POLYMARKET ANOMALY SUMMARY (sorted by implied HC capital):")
-        print("=" * 60)
-        for c in candidates[:10]:
-            ev = c.get("anomaly_evidence", {})
-            print(
-                f"  {c['ticker']:40s} {c['high_confidence_side']}@{c['implied_probability']}c  "
-                f"~${ev.get('implied_hc_dollars', 0):>8,} USDC HC  "
-                f"ratio={ev.get('hc_to_opp_ratio', 0):.1f}×  "
-                f"close={str(c.get('close_date', ''))[:10]}"
-            )
-        if len(candidates) > 10:
-            print(f"  ... and {len(candidates) - 10} more")
-        system_prompt_fn = lambda days: get_anomaly_classifier_system_prompt(days, platform="Polymarket")
-        prompt_builder = build_anomaly_prompt
-    else:
-        system_prompt_fn = lambda days: get_classifier_system_prompt(days, platform="Polymarket")
-        prompt_builder = build_regular_prompt
-
-    _print_candidates(candidates, system_prompt_fn, prompt_builder, CLASSIFIED_FILE, RECENCY_DAYS)
+    _print_two_phase_instructions(candidates, PM_SCANNER_CONFIG["candidates_file"], is_anomaly=is_anomaly)
 
 
 # ── Finalize ──────────────────────────────────────────────────────────────────

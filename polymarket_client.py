@@ -32,6 +32,8 @@ CATEGORY_MAP = {
     "Science & Technology":         "Science",
     "Science":                      "Science",
     "Technology":                   "Science",
+    "Health":                       "Health",
+    "Healthcare":                   "Health",
     "Sports":                       None,    # excluded
     "Crypto":                       None,    # excluded
     "Cryptocurrency":               None,    # excluded

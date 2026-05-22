@@ -27,7 +27,7 @@ DEFAULT_CONFIG = {
     "min_volume": 500,                    # raw volume floor
     "max_spread": 10,                     # wider spread allowed than primary scanner
     "max_pages": 20,
-    "scan_categories": ["Politics", "Economics", "Entertainment", "Weather", "World", "Elections"],
+    "scan_categories": ["Politics", "Economics", "Entertainment", "Weather", "World", "Elections", "Health", "Finance"],
     "cache_file": os.path.expanduser("~/.hermes/kalshi-tracker/cache/anomaly_cache.json"),
     "candidates_file": os.path.expanduser("~/.hermes/kalshi-tracker/cache/anomaly_candidates.json"),
 }

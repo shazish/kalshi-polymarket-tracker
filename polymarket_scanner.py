@@ -26,7 +26,7 @@ DEFAULT_CONFIG = {
     "min_volume":            1000,  # USDC — higher floor than Kalshi contracts
     "price_change_threshold": 3,    # cents
     "max_pages":             30,    # events pages per full scan
-    "scan_categories": ["Politics", "Economics", "Entertainment", "World", "Science"],
+    "scan_categories": ["Politics", "Economics", "Entertainment", "World", "Science", "Health", "Finance"],
     "cache_file":      os.path.expanduser("~/.hermes/kalshi-tracker/cache/pm_cache.json"),
     "candidates_file": os.path.expanduser("~/.hermes/kalshi-tracker/cache/pm_candidates.json"),
     "volume_anomaly_threshold": 5000,   # USDC — same logic as Kalshi
