@@ -4,9 +4,21 @@ Verify classifications — spot-check CERTAIN entries against real sources.
 Downgrades any CERTAIN where key claims can't be verified through
 valid settlement sources or where hallucinated details are found.
 """
-import json, sys, re
+import json, os, shutil, sys, re
 sys.path.insert(0, '/home/shaah/kalshi-tracker')
 from classifier import validate_classification
+
+KALSHI_DIR = '/home/shaah/kalshi-tracker'
+CURRENT_RUN_POINTER = os.path.join(KALSHI_DIR, 'logs', '.current_run')
+
+
+def _get_run_path():
+    if not os.path.exists(CURRENT_RUN_POINTER):
+        return None
+    with open(CURRENT_RUN_POINTER) as f:
+        run_dir = f.read().strip()
+    run_path = os.path.join(KALSHI_DIR, 'logs', run_dir)
+    return run_path if os.path.isdir(run_path) else None
 
 # Valid Kalshi settlement sources per contract
 VALID_SOURCES = {
@@ -106,12 +118,18 @@ def main():
             else:
                 print(f"🟢 {ticker}: passed verification")
     
-    # Save verified results
-    with open('/home/shaah/kalshi-tracker/cache/classified.json', 'w') as f:
+    # Save verified results back to cache
+    classified_cache = '/home/shaah/kalshi-tracker/cache/classified.json'
+    with open(classified_cache, 'w') as f:
         json.dump(results, f, indent=2)
-    
-    certain = sum(1 for r in results 
-                  if isinstance(r, dict) and isinstance(r.get('classification'), dict) 
+
+    # Mirror to run folder if one is active
+    run_path = _get_run_path()
+    if run_path:
+        shutil.copy2(classified_cache, os.path.join(run_path, 'classified.json'))
+
+    certain = sum(1 for r in results
+                  if isinstance(r, dict) and isinstance(r.get('classification'), dict)
                   and r['classification'].get('classification') == 'CERTAIN')
     print(f"\nVerification complete: {downgrades} downgraded, {certain} CERTAIN remaining")
 
