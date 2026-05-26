@@ -82,11 +82,42 @@ CURRENT_RUN_POINTER = os.path.join(LOGS_DIR, ".current_run")
 
 # ── Run-folder management ─────────────────────────────────────────────────────
 
+_CACHE_DIR = os.path.join(SKILL_DIR, "cache")
+
+# Files in cache/ that are persistent state and must NOT be deleted between runs.
+_PERSISTENT_CACHE = {
+    "market_cache.json",       # incremental scanner price snapshots
+    "anomaly_cache.json",      # anomaly scanner market snapshots
+}
+
+
+def _clean_cache():
+    """
+    Delete all pipeline artifact files from cache/ except persistent state.
+    Called at the start of every scan so stale artifacts from previous runs
+    cannot contaminate the current run.
+    """
+    if not os.path.isdir(_CACHE_DIR):
+        return
+    deleted = []
+    for name in os.listdir(_CACHE_DIR):
+        if name in _PERSISTENT_CACHE:
+            continue
+        path = os.path.join(_CACHE_DIR, name)
+        if os.path.isfile(path):
+            os.remove(path)
+            deleted.append(name)
+    if deleted:
+        print(f"[kalshi_cron] Cleaned {len(deleted)} stale artifact(s) from cache/")
+
+
 def _init_run(mode):
     """
-    Create a timestamped run folder and write the .current_run pointer.
-    Called at the start of every scan. Returns (run_path, run_dir).
+    Clean stale cache artifacts, create a timestamped run folder, and write
+    the .current_run pointer. Called at the start of every scan.
+    Returns (run_path, run_dir).
     """
+    _clean_cache()
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     run_dir = f"{ts}_{mode}"
     run_path = os.path.join(LOGS_DIR, run_dir)

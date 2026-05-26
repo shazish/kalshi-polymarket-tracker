@@ -105,7 +105,7 @@ def main():
                     print(f"     {iss}")
                 # Downgrade to LIKELY
                 cl['classification'] = 'LIKELY'
-                cl['_valid'] = None
+                cl['_valid'] = False
                 # Add the verification issues as contradicting signals
                 for iss in issues[:3]:
                     cl.setdefault('contradicting_signals', []).append({
