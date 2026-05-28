@@ -212,49 +212,6 @@ def run_pm_scan(mode):
         scanner.save_candidates(candidates)
     return candidates or []
 
-def _run_research_subagents(candidates, run_dir):
-    """Run three sequential Owl‑Alpha sub‑agents (batch size ~⅓ of candidates).
-    Each sub‑agent receives its slice of the candidate list via a JSON payload.
-    The sub‑agents write `cache/research_batch{N}.json` (and a copy in the run
-    folder). This function blocks until each sub‑agent finishes before starting
-    the next, respecting the pipeline's sequential‑only rule.
-    """
-    import json, math, os
-    n = len(candidates)
-    n_batches = 1 if n <= 15 else 2 if n <= 40 else 3
-    batch_size = math.ceil(n / n_batches)
-    for batch_index in range(n_batches):
-        start = batch_index * batch_size
-        end = min(start + batch_size, len(candidates))
-        batch = candidates[start:end]
-        if not batch:
-            continue
-        # Prepare a temporary file with the batch so the sub‑agent can read it.
-        batch_path = os.path.join(SKILL_DIR, f"cache/research_batch{batch_index}.json")
-        with open(batch_path, "w") as f:
-            json.dump(batch, f, indent=2)
-        # Run the delegate_task sub‑agent.
-        goal = (
-            f"Research the following Kalshi anomaly candidates (batch {batch_index + 1}/3). "
-            f"Read the JSON file at {batch_path}, perform web research for each ticker, "
-            f"and write the enriched results back to the same file. "
-            "Only use web, terminal, and file toolsets. Do not classify, only gather "
-            "sources, summaries, and any relevant market information."
-        )
-        from hermes_tools import delegate_task
-        # Use Owl‑Alpha via model override – the sub‑agent itself will call the LLM.
-        delegate_task(
-            goal=goal,
-            toolsets=["web", "terminal", "file"],
-            # Model override for Owl Alpha
-            acp_args=[],
-            # No explicit acp_command – inherit current transport
-        )
-        # Sub‑agent writes its output back to the same path; after it finishes we
-        # copy the file into the run folder for archival.
-        _copy_to_run(batch_path, os.path.join(LOGS_DIR, run_dir))
-        _print_progress("Classification - Research", batch_index + 1, 3)
-
 def _run_verification():
     """Execute the verification script that downgrades invalid CERTAIN entries."""
     import subprocess, sys

@@ -94,7 +94,14 @@ class RunLog:
         duration_s: float,
         issues: list[str],
         n_filtered: int = 0,
+        n_batches: int = None,
     ) -> None:
+        if batch_index == 0:
+            header_batches = f" | **Batches:** {n_batches}" if n_batches else ""
+            self._append(f"""## Step 2 — Research
+**Started:** {_now()}{header_batches}
+
+""")
         issue_lines = "\n".join(f"  - ⚠️ {iss}" for iss in issues) if issues else "  - none"
         filter_note = f" | **Findings pruned by filter:** {n_filtered}" if n_filtered else ""
         self._append(f"""### Batch {batch_index}
