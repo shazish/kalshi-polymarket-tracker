@@ -79,7 +79,7 @@ def _write_batches(candidates: list) -> list:
     return written
 
 
-def _print_instructions(mode: str, candidates: list, run_dir: str, batches: list) -> None:
+def _print_instructions(mode: str, candidates: list, run_dir: str, batches: list, model_override: str = None) -> None:
     is_anomaly = "anomaly" in mode
     n = len(candidates)
     classifier_prompt_fn = (
@@ -166,7 +166,7 @@ After ALL batches finish, also run:
   python3 -c "from pipeline_run_log import RunLog; log = RunLog.for_current_run(); log and log.step_research_complete()"
 
 {sep}
-STEP 3 — CLASSIFICATION  (one LLM call per ticker — no shortcuts)
+STEP 3 — CLASSIFICATION  (one call per ticker — no shortcuts)
 {sep}
 
 After ALL research batches are complete:
@@ -180,13 +180,30 @@ After ALL research batches are complete:
               confirming_signals=[], contradicting_signals=[],
               what_would_change_this="Complete research for this ticker",
               settlement_risk="", recent_developments="", searched_for=[]
-            - Skip the LLM call for this ticker.
-       b. Otherwise, build the classifier prompt using:
-            classifier.py:{classifier_prompt_fn}
-       c. Inject research.summary + research.findings as additional evidence.
-       d. Make ONE focused LLM call per ticker (do not batch in-context).
-       e. Call validate_classification(result) — retry if validation fails.
-  3. Collect all results into a list.
+            - Skip the classification call for this ticker.
+       b. Otherwise:""" + (f"""
+            Use Classifier(model="{model_override}") to classify via external API:
+              from classifier import Classifier
+              from classifier import validate_classification
+              clf = Classifier(model="{model_override}")
+              result = clf.classify(candidate, research=research_entry)
+              # validate_classification() is called inside clf.classify()""" if model_override else f"""
+            YOU (Hermes) classify this ticker directly using your current model:
+              i.  Get system prompt:  classifier.py:{classifier_prompt_fn}
+              ii. Get user prompt:    classifier.py:build_{'anomaly' if is_anomaly else 'regular'}_prompt(candidate)
+              iii.Append to user prompt: the research summary and findings from step 1
+                  (replace the "Instructions: 1. Perform web searches" block with
+                   the pre-conducted research findings — same as _inject_research() does)
+              iv. Reason and output the JSON schema defined in the system prompt.
+              v.  Run:  python3 -c "
+                    from classifier import validate_classification
+                    import json
+                    result = <your JSON output as a dict>
+                    validated = validate_classification(result, rules=candidate.get('rules_primary',''))
+                    print(json.dumps(validated, indent=2))
+                    " """) + """
+  3. Collect all results into a list in this format:
+       {{"candidate": <original candidate dict>, "classification": <validated classification dict>}}
   4. Save to BOTH:
        cache/classified.json
        logs/{run_dir}/classified.json
@@ -212,7 +229,7 @@ After saving classified.json, write the classification summary to the run log:
 PROHIBITED — stop and ask user before doing any of the following:
   - Writing a Python file with classification results hardcoded per ticker
   - Reasoning about all tickers in one in-context pass and saving as constants
-  - Skipping Classifier.classify() for any ticker for any reason
+  - Skipping individual per-ticker classification for any reason
 
 {sep}
 STEP 4 — VERIFY
@@ -239,12 +256,24 @@ Pipeline complete when finalize exits 0.
 
 
 def main() -> None:
-    if len(sys.argv) < 2 or sys.argv[1] not in VALID_MODES:
-        print("Usage: kalshi-pm-analyzer <mode>")
+    args = sys.argv[1:]
+    model_override = None
+    if "--model" in args:
+        idx = args.index("--model")
+        if idx + 1 >= len(args):
+            print("ERROR: --model requires a value")
+            sys.exit(1)
+        model_override = args[idx + 1]
+        args = [a for i, a in enumerate(args) if i != idx and i != idx + 1]
+
+    if not args or args[0] not in VALID_MODES:
+        print("Usage: kalshi-pm-analyzer <mode> [--model MODEL]")
         print(f"Modes: {' | '.join(VALID_MODES)}")
+        print("  --model MODEL  Use a specific model for classification (e.g. claude-opus-4-7,")
+        print("                 openrouter/nvidia/nemotron-70b). Default: Hermes classifies directly.")
         sys.exit(1)
 
-    mode = sys.argv[1]
+    mode = args[0]
 
     # Step 1: scan
     print(f"\n{'=' * 70}")
@@ -289,7 +318,7 @@ def main() -> None:
         print(f"[kalshi-pm-analyzer] WARNING: could not write run log: {e}")
 
     # Print instructions for steps 2-5
-    _print_instructions(mode, candidates, run_dir, batches)
+    _print_instructions(mode, candidates, run_dir, batches, model_override)
 
 
 if __name__ == "__main__":
