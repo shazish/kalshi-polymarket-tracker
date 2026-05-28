@@ -35,6 +35,7 @@ sys.path.insert(0, SKILL_DIR)
 from classifier import (
     validate_classification,
 )
+from research_utils import filter_research_batch  # Import the new filtering utility
 from market_clusterer import cluster_candidates, cluster_stats
 
 RECENCY_DAYS = int(os.environ.get("KALSHI_RECENCY_DAYS", 14))
@@ -79,7 +80,6 @@ PM_SCANNER_CONFIG = {
 LOGS_DIR = os.path.join(SKILL_DIR, "logs")
 CURRENT_RUN_POINTER = os.path.join(LOGS_DIR, ".current_run")
 
-
 # ── Run-folder management ─────────────────────────────────────────────────────
 
 _CACHE_DIR = os.path.join(SKILL_DIR, "cache")
@@ -89,7 +89,6 @@ _PERSISTENT_CACHE = {
     "market_cache.json",       # incremental scanner price snapshots
     "anomaly_cache.json",      # anomaly scanner market snapshots
 }
-
 
 def _clean_cache():
     """
@@ -110,7 +109,6 @@ def _clean_cache():
     if deleted:
         print(f"[kalshi_cron] Cleaned {len(deleted)} stale artifact(s) from cache/")
 
-
 def _init_run(mode):
     """
     Clean stale cache artifacts, create a timestamped run folder, and write
@@ -127,7 +125,6 @@ def _init_run(mode):
     print(f"[kalshi_cron] Run folder: logs/{run_dir}/")
     return run_path, run_dir
 
-
 def _get_current_run():
     """
     Return (run_path, run_dir) from the .current_run pointer, or (None, None)
@@ -142,12 +139,10 @@ def _get_current_run():
         return run_path, run_dir
     return None, None
 
-
 def _copy_to_run(src_path, run_path):
     """Copy src_path into run_path if it exists."""
     if os.path.exists(src_path):
         shutil.copy2(src_path, os.path.join(run_path, os.path.basename(src_path)))
-
 
 # ── Scan runners ──────────────────────────────────────────────────────────────
 
@@ -165,7 +160,6 @@ def run_price_scan(mode):
         scanner.save_candidates(candidates)
     return candidates or []
 
-
 def run_anomaly_scan():
     """Run AnomalyScanner and return volume-anomaly candidates."""
     from anomaly_scanner import AnomalyScanner
@@ -174,7 +168,6 @@ def run_anomaly_scan():
     if candidates:
         scanner.save_candidates(candidates)
     return candidates or []
-
 
 def run_pm_scan(mode):
     """Run PolymarketScanner in the given mode and return candidates."""
@@ -190,7 +183,6 @@ def run_pm_scan(mode):
     if candidates:
         scanner.save_candidates(candidates)
     return candidates or []
-
 
 # ── Output helpers ────────────────────────────────────────────────────────────
 
@@ -216,21 +208,14 @@ def _print_two_phase_instructions(candidates, candidates_file, run_dir, is_anoma
     print(f"\n{'='*60}")
     print("TWO-PHASE CLASSIFICATION INSTRUCTIONS:")
     print(f"{'='*60}")
-    print(f"""
-Run folder (all artifacts for this run): logs/{run_dir}/
-
-Phase 1 — RESEARCH (SEQUENTIAL Owl Alpha subagents):
-  Read the candidates file at cache/{candidates_file.split('/')[-1]}.
-  Split candidates into 3 batches.
-  Run Owl Alpha subagents ONE AT A TIME — do NOT use tasks=[...] with 3 parallel entries,
-  as concurrent OpenRouter connections trigger 401s and timeouts.
-  For each batch separately: delegate_task(goal="...", model={{"model": "openrouter/owl-alpha", "provider": "openrouter"}}, toolsets=[web, terminal, file])
-  Wait for each subagent to finish before starting the next batch.
-  Each subagent saves to cache/research_batch{{N}}.json AND logs/{run_dir}/research_batch{{N}}.json.
-
 Phase 2 — CLASSIFICATION (main agent — NOT a subagent):
   Load all cache/research_batch*.json into a ticker→research dict.
-  For each candidate, call Classifier.classify(candidate, research=research_entry) — one focused
+  Apply research filtering to improve source quality (recency, authority, relevance) using research_utils.filter_research_batch():
+    1. Create market_info_dict: {ticker: {'title': candidate['title'], 'rules': candidate.get('rules_primary', '')}}
+    2. research_list = list(ticker_to_research_dict.values())
+    3. filtered_research_list = filter_research_batch(research_list, market_info_dict)
+    4. Use filtered_research_list for classification (instead of raw research)
+  For each candidate, call Classifier.classify(candidate, research=filtered_research_entry) — one focused
   LLM call per ticker. The Classifier prompt is in classifier.py; do NOT bypass it.
   Inject Phase 1 research (findings + summary) into the prompt as additional evidence context.
   Call validate_classification() on every output before saving.
@@ -241,6 +226,17 @@ Phase 2 — CLASSIFICATION (main agent — NOT a subagent):
   - Reasoning about all tickers in one in-context pass and saving results as constants
   - Skipping Classifier.classify() for any reason
   - Substituting any other approach for the per-ticker LLM call design above
+    print(f"""
+Run folder (all artifacts for this run): logs/{run_dir}/
+
+Phase 1 — RESEARCH (SEQUENTIAL Owl Alpha subagents):
+  Read the candidates file at cache/{candidates_file.split('/')[-1]}.
+  Split candidates into 3 batches.
+  Run Owl Alpha subagents ONE AT A TIME — do NOT use tasks=[...] with 3 parallel entries,
+  as concurrent OpenRouter connections trigger 401s and timeouts.
+  For each batch separately: delegate_task(goal=\"...\", model={{\"model\": \"openrouter/owl-alpha\", \"provider\": \"openrouter\"}}, toolsets=[web, terminal, file])
+  Wait for each subagent to finish before starting the next batch.
+  Each subagent saves to cache/research_batch{{N}}.json AND logs/{run_dir}/research_batch{{N}}.json.
 
 Step 3 — VERIFY (fact-check CERTAIN entries):
   Run: python3 scripts/verify_classifications.py
@@ -252,7 +248,6 @@ Finalize:
   Run: python3 {__file__} finalize
   Copies all remaining cache artifacts to logs/{run_dir}/ and exports the Excel report.
 """)
-
 
 def print_price_scan(mode):
     """Run a price-filter scan and print two-phase classification instructions."""
@@ -268,11 +263,10 @@ def print_price_scan(mode):
     _copy_to_run(CANDIDATES_FILE, run_path)
     _print_two_phase_instructions(candidates, CANDIDATES_FILE, run_dir)
 
-
 def print_anomaly_scan():
     """Run the anomaly scan and print two-phase classification instructions."""
     run_path, run_dir = _init_run("anomaly")
-    print("[kalshi_cron] Running anomaly scan...")
+    print(f"[kalshi_cron] Running anomaly scan...")
     candidates = run_anomaly_scan()
     print(f"[kalshi_cron] AnomalyScanner found {len(candidates)} candidates")
 
@@ -282,7 +276,6 @@ def print_anomaly_scan():
 
     _copy_to_run(ANOMALY_CANDIDATES_FILE, run_path)
     _print_two_phase_instructions(candidates, ANOMALY_CANDIDATES_FILE, run_dir, is_anomaly=True)
-
 
 def print_pm_scan(mode):
     """Run a Polymarket scan and print two-phase classification instructions."""
@@ -296,10 +289,8 @@ def print_pm_scan(mode):
         print("No candidates. Done.")
         sys.exit(0)
 
-    pm_candidates_file = PM_SCANNER_CONFIG["candidates_file"]
     _copy_to_run(pm_candidates_file, run_path)
     _print_two_phase_instructions(candidates, pm_candidates_file, run_dir, is_anomaly=is_anomaly)
-
 
 _RUN_ARTIFACTS = [
     "candidates.json",
@@ -319,7 +310,6 @@ _RUN_ARTIFACT_GLOBS = [
     "research_batch*.json",
     "research_single_*.json",
 ]
-
 
 def _archive_run(excel_path, run_path, run_dir):
     """
@@ -352,7 +342,6 @@ def _archive_run(excel_path, run_path, run_dir):
 
     print(f"[kalshi_cron] Archived run → logs/{run_dir}/  ({copied} cache artifacts + Excel)")
     return run_dir
-
 
 def finalize():
     """Load classified.json, validate, run opportunity manager, export report."""
@@ -462,7 +451,6 @@ def finalize():
 
     log.info("Report saved → logs/%s/", run_dir)
     print(f"\n[kalshi_cron] Run complete → logs/{run_dir}/")
-
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
