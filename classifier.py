@@ -685,6 +685,7 @@ class Classifier:
         return resp.json()["content"][0]["text"]
 
     def _call_openrouter(self, _req, system_prompt: str, user_prompt: str) -> str:
+        model_id = self.model[len("openrouter/"):] if self.model.startswith("openrouter/") else self.model
         resp = _req.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
@@ -692,7 +693,7 @@ class Classifier:
                 "content-type": "application/json",
             },
             json={
-                "model": self.model,
+                "model": model_id,
                 "max_tokens": self.MAX_TOKENS,
                 "messages": [
                     {"role": "system", "content": system_prompt},

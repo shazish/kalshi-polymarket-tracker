@@ -267,28 +267,10 @@ def _run_verification():
         sys.exit(1)
 
 def _run_finalize_if_requested(mode_label):
-    """If the user asked for automatic finalisation, invoke the finalize routine.
-    The original script only runs finalize when called with the "finalize"
-    argument. Here we add an optional env var `KALSHI_AUTO_FINALIZE=1` to trigger
-    it automatically after verification.
-    """
+    """If the user asked for automatic finalisation, invoke the finalize routine."""
     if os.getenv("KALSHI_AUTO_FINALIZE") == "1":
         print("[kalshi_cron] Auto‑finalising run…")
         finalize()
-
-    """Run PolymarketScanner in the given mode and return candidates."""
-    from polymarket_scanner import PolymarketScanner
-    scanner = PolymarketScanner(PM_SCANNER_CONFIG)
-    scan_fn = {
-        "pm-incremental": scanner.incremental_scan,
-        "pm-full":        scanner.full_scan,
-        "pm-deep":        scanner.deep_scan,
-        "pm-anomaly":     scanner.anomaly_scan,
-    }[mode]
-    candidates = scan_fn()
-    if candidates:
-        scanner.save_candidates(candidates)
-    return candidates or []
 
 # ── Output helpers ────────────────────────────────────────────────────────────
 
@@ -347,10 +329,6 @@ def print_price_scan(mode):
     print(f"[kalshi_cron] Running {mode} scan...")
     candidates = run_price_scan(mode)
     print(f"[kalshi_cron] Scanner found {len(candidates)} candidates")
-    # Progress updates for scan phase
-    total = len(candidates)
-    for i, _ in enumerate(candidates):
-        _print_progress("Phase 0 - SCAN", i+1, total)
 
     if not candidates:
         print("No candidates. Done.")
@@ -358,11 +336,6 @@ def print_price_scan(mode):
 
     _copy_to_run(CANDIDATES_FILE, run_path)
     _print_two_phase_instructions(candidates, CANDIDATES_FILE, run_dir)
-    # Show placeholder progress for research batches (Phase 1) – each batch is a subagent run.
-    # The actual subagents will also print their own progress; this gives a quick overview.
-    batch_total = (len(candidates) + 2) // 3  # three batches (ceil)
-    for i in range(1, batch_total + 1):
-        _print_progress("Classification - Research", i, batch_total)
 
 def print_anomaly_scan():
     """Run the anomaly scan and print two-phase classification instructions."""
@@ -370,21 +343,13 @@ def print_anomaly_scan():
     print(f"[kalshi_cron] Running anomaly scan...")
     candidates = run_anomaly_scan()
     print(f"[kalshi_cron] AnomalyScanner found {len(candidates)} candidates")
-    # Progress updates for anomaly phase
-    total = len(candidates)
-    for i, _ in enumerate(candidates):
-        _print_progress("Phase 0 - ANOMALY", i+1, total)
- 
+
     if not candidates:
         print("No anomaly candidates. Done.")
         sys.exit(0)
- 
+
     _copy_to_run(ANOMALY_CANDIDATES_FILE, run_path)
     _print_two_phase_instructions(candidates, ANOMALY_CANDIDATES_FILE, run_dir, is_anomaly=True)
-    # Research progress placeholder (Phase 1) — anomaly pipeline also uses research batches.
-    batch_total = (len(candidates) + 2) // 3
-    for i in range(1, batch_total + 1):
-        _print_progress("Classification - Research", i, batch_total)
 
 def print_pm_scan(mode):
     """Run a Polymarket scan and print two-phase classification instructions."""
@@ -393,10 +358,6 @@ def print_pm_scan(mode):
     print(f"[kalshi_cron] Running {mode} scan (Polymarket — USDC settlement)...")
     candidates = run_pm_scan(mode)
     print(f"[kalshi_cron] PolymarketScanner found {len(candidates)} candidates")
-    # Progress updates for Polymarket scan phase
-    total = len(candidates)
-    for i, _ in enumerate(candidates):
-        _print_progress("Phase 0 - POLYMARKET", i+1, total)
 
     if not candidates:
         print("No candidates. Done.")
@@ -404,10 +365,6 @@ def print_pm_scan(mode):
 
     _copy_to_run(PM_CANDIDATES_FILE, run_path)
     _print_two_phase_instructions(candidates, PM_CANDIDATES_FILE, run_dir, is_anomaly=is_anomaly)
-    # Research progress placeholder (Phase 1) – same three‑batch pattern.
-    batch_total = (len(candidates) + 2) // 3
-    for i in range(1, batch_total + 1):
-        _print_progress("Classification - Research", i, batch_total)
 
 _RUN_ARTIFACTS = [
     "candidates.json",
