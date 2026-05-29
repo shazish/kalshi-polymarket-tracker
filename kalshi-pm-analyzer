@@ -130,18 +130,6 @@ Output schema — each entry must be the original candidate dict with one new ke
     }}
   }}
 
-After all research batches finish, run filter_research_batch() from research_utils.py on each
-batch file to prune low-quality findings before classification:
-  from pathlib import Path
-  from research_utils import filter_research_batch
-  import json
-  REPO = Path('/home/shaah/kalshi-tracker')
-  for batch_path in sorted(REPO.glob("cache/research_batch*.json")):
-      data = json.loads(batch_path.read_text())
-      market_info = {{e["ticker"]: {{"title": e.get("title",""), "rules": e.get("rules_primary","")}} for e in data}}
-      filtered = filter_research_batch(data, market_info)
-      batch_path.write_text(json.dumps(filtered, indent=2))
-
 Batches:""")
 
     for i, count, path in batches:
