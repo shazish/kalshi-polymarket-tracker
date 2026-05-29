@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""
+check_research.py — Post-batch research health check.
+
+Detects consecutive zero-findings entries (search tool failure) vs isolated
+empty results. Updates each entry with search_status: ok | empty | search_failed,
+and appends failed entries to cache/research_retry.json for the retry phase.
+
+Usage:
+    python3 scripts/check_research.py cache/research_batchN.json
+"""
+import json
+import sys
+from pathlib import Path
+
+CONSECUTIVE_FAIL_THRESHOLD = 3
+REPO = Path(__file__).parent.parent
+RETRY_PATH = REPO / "cache" / "research_retry.json"
+
+
+def check_batch(batch_path: Path) -> dict:
+    data = json.loads(batch_path.read_text())
+
+    # First pass: assign preliminary status and find where consecutive run starts
+    consecutive_zeros = 0
+    fail_start_idx = None
+
+    for i, entry in enumerate(data):
+        research = entry.setdefault("research", {})
+        n = len(research.get("findings", []))
+        if n > 0:
+            consecutive_zeros = 0
+            research["search_status"] = "ok"
+        else:
+            consecutive_zeros += 1
+            if consecutive_zeros == CONSECUTIVE_FAIL_THRESHOLD and fail_start_idx is None:
+                # Mark the start of the failure run (backtrack)
+                fail_start_idx = i - (CONSECUTIVE_FAIL_THRESHOLD - 1)
+            research["search_status"] = "search_failed" if fail_start_idx is not None else "empty"
+
+    # Second pass: anything after fail_start_idx with 0 findings is search_failed
+    if fail_start_idx is not None:
+        for i in range(fail_start_idx, len(data)):
+            research = data[i].get("research", {})
+            if len(research.get("findings", [])) == 0:
+                research["search_status"] = "search_failed"
+
+    # Write updated batch in-place
+    batch_path.write_text(json.dumps(data, indent=2))
+
+    ok = sum(1 for e in data if e.get("research", {}).get("search_status") == "ok")
+    empty = sum(1 for e in data if e.get("research", {}).get("search_status") == "empty")
+    failed = sum(1 for e in data if e.get("research", {}).get("search_status") == "search_failed")
+
+    # Append new search_failed entries to retry queue (no duplicates)
+    existing = json.loads(RETRY_PATH.read_text()) if RETRY_PATH.exists() else []
+    existing_tickers = {r["ticker"] for r in existing}
+    new_retries = [
+        {"ticker": e["ticker"], "batch": batch_path.name, "title": e.get("title", "")}
+        for e in data
+        if e.get("research", {}).get("search_status") == "search_failed"
+        and e.get("ticker") not in existing_tickers
+    ]
+    if new_retries:
+        RETRY_PATH.write_text(json.dumps(existing + new_retries, indent=2))
+
+    return {"ok": ok, "empty": empty, "failed": failed, "n_retries": len(new_retries)}
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python3 scripts/check_research.py <batch_file>")
+        sys.exit(1)
+
+    batch_path = Path(sys.argv[1])
+    if not batch_path.exists():
+        print(f"[check_research] File not found: {batch_path}")
+        sys.exit(1)
+
+    r = check_batch(batch_path)
+    print(
+        f"[check_research] {batch_path.name}: "
+        f"ok={r['ok']} empty={r['empty']} search_failed={r['failed']} "
+        f"(+{r['n_retries']} added to retry queue)"
+    )
+    if RETRY_PATH.exists():
+        queue = json.loads(RETRY_PATH.read_text())
+        if queue:
+            print(f"[check_research] Total retry queue: {len(queue)} entries")
+
+
+if __name__ == "__main__":
+    main()

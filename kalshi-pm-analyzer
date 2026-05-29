@@ -151,21 +151,77 @@ Batches:""")
     print(f"""
 Also copy each finished batch to: logs/{run_dir}/research_batch{{N}}.json
 
-After EACH batch completes, append its result to the run log:
-  python3 -c "
-  from pipeline_run_log import RunLog
-  log = RunLog.for_current_run()
-  if log:
-      log.step_research_batch(
-          batch_index=<N>,
-          n_tickers=<count>,
-          duration_s=<seconds>,
-          issues=[<list any tickers with empty findings or missing research>],
-          n_filtered=<findings removed by filter_research_batch>,
-      )
-  "
-After ALL batches finish, also run:
+After EACH batch completes, run these three commands IN ORDER:
+
+  1. Health check — detect search failures vs genuine empty results:
+       python3 scripts/check_research.py cache/research_batch<N>.json
+     This writes search_status: ok|empty|search_failed to each entry and
+     appends failed entries to cache/research_retry.json.
+
+  2. Filter — prune low-quality findings:
+       from pathlib import Path
+       from research_utils import filter_research_batch
+       import json
+       REPO = Path('/home/shaah/kalshi-tracker')
+       batch_path = REPO / 'cache' / 'research_batch<N>.json'
+       data = json.loads(batch_path.read_text())
+       market_info = {{e["ticker"]: {{"title": e.get("title",""), "rules": e.get("rules_primary","")}} for e in data}}
+       filtered = filter_research_batch(data, market_info)
+       batch_path.write_text(json.dumps(filtered, indent=2))
+
+  3. Run log — append batch result:
+       python3 -c "
+       from pipeline_run_log import RunLog
+       log = RunLog.for_current_run()
+       if log:
+           log.step_research_batch(
+               batch_index=<N>,
+               n_tickers=<count>,
+               duration_s=<seconds>,
+               issues=[<tickers with search_status=search_failed or empty findings>],
+               n_filtered=<findings removed by filter_research_batch>,
+           )
+       "
+
+After ALL batches finish, run:
   python3 -c "from pipeline_run_log import RunLog; log = RunLog.for_current_run(); log and log.step_research_complete()"
+
+{sep}
+STEP 2.5 — RETRY FAILED SEARCHES  (skip if cache/research_retry.json absent or empty)
+{sep}
+
+  python3 -c "
+  import json
+  from pathlib import Path
+  p = Path('cache/research_retry.json')
+  q = json.loads(p.read_text()) if p.exists() else []
+  print(f'Retry queue: {{len(q)}} entries')
+  for e in q: print(f'  {{e[\"ticker\"]}} ({{e[\"batch\"]}}) — {{e[\"title\"][:60]}}')
+  "
+
+If retry queue is non-empty, spawn ONE retry subagent:
+
+  The retry subagent MUST:
+  1. Verify search works first: search for "breaking news today" or similar.
+       - If search returns 0 results, halt immediately and report:
+           "SEARCH TOOL UNAVAILABLE — retry skipped. Proceed to Step 3.
+            All search_failed entries will be classified as UNCLEAR."
+       - Do NOT attempt to research any tickers if the verification search fails.
+  2. For each ticker in cache/research_retry.json:
+       a. Load the entry from its batch file (use the "batch" field to find it).
+       b. Perform fresh research — 3 searches:
+            - Current status of the event
+            - "[topic] news [current month year]"
+            - Settlement criteria
+       c. Update ONLY the "research" key in-place in the batch file.
+          Set search_status="ok" if findings found, "empty" if still none.
+       d. Do NOT touch any other fields.
+  3. After all retries, delete cache/research_retry.json.
+  4. Re-run filter on any updated batch files:
+       python3 scripts/check_research.py cache/research_batch<N>.json
+       (for each batch that had retries)
+
+After retry subagent completes (or is skipped), proceed to Step 3.
 
 {sep}
 STEP 3 — CLASSIFICATION  (one call per ticker — no shortcuts)

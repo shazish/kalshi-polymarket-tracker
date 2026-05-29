@@ -432,7 +432,7 @@ def validate_classification(output, rules: str = ""):
     if not output.get("what_would_change_this", "").strip():
         errors.append("what_would_change_this is empty")
 
-    if len(output.get("searched_for", [])) < 3:
+    if output.get("classification") != "UNCLEAR" and len(output.get("searched_for", [])) < 3:
         errors.append(f"Expected >= 3 searched_for (including recency search), got {len(output.get('searched_for', []))}")
 
     if not isinstance(output.get("confidence_score"), (int, float)):
