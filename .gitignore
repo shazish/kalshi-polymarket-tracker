@@ -35,3 +35,4 @@ kalshi-video/final.mp4
 
 # Plans (not part of the project)
 plans/
+.claude/settings.local.json

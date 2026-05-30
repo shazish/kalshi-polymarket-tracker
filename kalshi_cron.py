@@ -61,6 +61,21 @@ from market_clusterer import cluster_candidates, cluster_stats
 
 RECENCY_DAYS = int(os.environ.get("KALSHI_RECENCY_DAYS", 14))
 
+
+def make_classified_entry(candidate: dict, classification: dict) -> dict:
+    """
+    Build a classified.json entry that preserves the FULL candidate dict.
+
+    Always use this instead of constructing {candidate: {...}, classification: {...}}
+    by hand — hand-built entries silently drop series_ticker, event_ticker, and other
+    fields the Excel reporter and opportunity manager need.
+    """
+    return {
+        "candidate": dict(candidate),
+        "classification": classification,
+    }
+
+
 CANDIDATES_FILE = os.path.join(SKILL_DIR, "cache", "candidates.json")
 ANOMALY_CANDIDATES_FILE = os.path.join(SKILL_DIR, "cache", "anomaly_candidates.json")
 CLASSIFIED_FILE = os.path.join(SKILL_DIR, "cache", "classified.json")
@@ -238,30 +253,45 @@ def _print_two_phase_instructions(candidates, candidates_file, run_dir, is_anoma
     print(f"{'='*60}")
 
     print(f"""Run folder (all artifacts for this run): logs/{run_dir}/
-+
-+Phase 1 — RESEARCH (Sequential Owl Alpha subagents):
-+  Read the candidates file at cache/{candidates_file.split('/')[-1]}.
-+  Split candidates into 3 batches.
-+  Run delegate_task(goal="...", model={{"model": "openrouter/owl-alpha", "provider": "openrouter"}}, toolsets=[web, terminal, file])
-+  for each batch ONE AT A TIME (no parallel tasks).
-+  Each subagent saves to cache/research_batch{{N}}.json AND logs/{run_dir}/research_batch{{N}}.json.
-+
-+Phase 2 — VERIFY (fact‑check CERTAIN entries):
-+  Run: python3 scripts/verify_classifications.py
-+  This checks CERTAIN classifications for hallucinated facts, invalid source URLs,
-+  and market‑price contradictions. Any failed CERTAIN is auto‑downgraded to LIKELY.
-+  Results are written to cache/classified.json and logs/{run_dir}/classified.json.
-+
-+Finalization:
-+  Run: python3 {__file__} finalize
-+  Copies all remaining cache artifacts to logs/{run_dir}/ and exports the Excel report.
-+
-+   PROHIBITED — stop and ask the user before doing any of the following:
-+   - Writing a Python file with classification tuples hardcoded per ticker
-+   - Reasoning about all tickers in one in-context pass and saving results as constants
-+   - Skipping Classifier.classify() for any reason
-+   - Substituting any other approach for the per‑ticker LLM call design above
-+""")
+
+Phase 1 — RESEARCH (Sequential subagents):
+  Read candidates from cache/{candidates_file.split('/')[-1]}.
+  Split into batches of ~40 (3 batches for ~120 candidates).
+  For each batch, spawn ONE research subagent at a time (no parallel tasks).
+  Each subagent does web research and saves:
+    cache/research_batch{{N}}.json  AND  logs/{run_dir}/research_batch{{N}}.json
+  Output schema per entry: {{ticker, title, price, side, research: {{searches_performed, findings, summary}}}}
+
+  FALLBACK — if a subagent times out or fails:
+    python3 scripts/run_research_batch.py research_batch{{N}} {run_dir}
+  This uses direct Tavily API calls. Requires TAVILY_API_KEY in ~/.hermes/.env.
+
+Phase 2 — CLASSIFY (per-ticker LLM calls):
+  Load all cache/research_batch*.json files.
+  Load existing cache/classified.json (if any) to get already-classified tickers.
+  For each candidate NOT already in classified.json:
+    Call Classifier.classify(candidate, research=research_entry) — one LLM call per ticker.
+    Call validate_classification() on every output before saving.
+    Build the entry with: make_classified_entry(candidate, classification_result)
+      from kalshi_cron import make_classified_entry
+      (Do NOT hand-build {{candidate: {{...}}, classification: {{...}}}} — that drops series_ticker and other fields.)
+  Save all results (existing + new) to cache/classified.json AND logs/{run_dir}/classified.json.
+
+  PROHIBITED — stop and ask the user before doing any of the following:
+  - Writing a Python file with classification tuples hardcoded per ticker
+  - Reasoning about all tickers in one in-context pass and saving results as constants
+  - Skipping Classifier.classify() for any ticker without asking first
+  - Pattern-matching or heuristic substitution for the per-ticker LLM call
+
+Step 3 — VERIFY (fact‑check CERTAIN entries):
+  Run: python3 scripts/verify_classifications.py
+  Downgrades hallucinated or market-contradicted CERTAIN entries to LIKELY.
+  Results written to cache/classified.json and logs/{run_dir}/classified.json.
+
+Finalization:
+  Run: python3 {__file__} finalize
+  Copies all remaining cache artifacts to logs/{run_dir}/ and exports the Excel report.
+""")
 
 def print_price_scan(mode):
     """Run a price-filter scan and print two-phase classification instructions."""
