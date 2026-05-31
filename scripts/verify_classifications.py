@@ -171,5 +171,22 @@ def main():
     except Exception as e:
         print(f"[verify] WARNING: could not write run log: {e}")
 
+def _log_fatal(msg: str) -> None:
+    import traceback as _tb
+    full = f"{msg}\n{_tb.format_exc()}"
+    print(f"[verify] FATAL: {full}", file=sys.stderr)
+    try:
+        from pipeline_run_log import RunLog
+        log = RunLog.for_current_run()
+        if log:
+            log.step_error("Step 4 — Verify", full[:1000])
+    except Exception:
+        pass
+
+
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        _log_fatal(str(e))
+        sys.exit(1)

@@ -325,8 +325,21 @@ def finalize():
 
     from opportunity_manager import OpportunityManager
     from excel_reporter import export_excel
-    mgr = OpportunityManager()
-    to_notify, to_log = mgr.process(classified)
+
+    try:
+        mgr = OpportunityManager()
+        to_notify, to_log = mgr.process(classified)
+    except Exception as e:
+        log.error("OpportunityManager failed: %s", e)
+        print(f"[kalshi-pm-analyzer] ERROR: opportunity manager failed: {e}", file=sys.stderr)
+        try:
+            from pipeline_run_log import RunLog
+            rl = RunLog.for_current_run()
+            if rl:
+                rl.step_error("Step 5 — Finalize (OpportunityManager)", str(e))
+        except Exception:
+            pass
+        raise
 
     if to_log:
         n = mgr.log_to_dashboard(to_log)
@@ -349,7 +362,19 @@ def finalize():
 
     excel_basename = f"{run_dir}.xlsx"
     excel_path = os.path.join(LOGS_DIR, excel_basename)
-    result_path = export_excel(to_notify, to_log, excel_path, mode_label=mode_label)
+    try:
+        result_path = export_excel(to_notify, to_log, excel_path, mode_label=mode_label)
+    except Exception as e:
+        log.error("Excel export failed: %s", e)
+        print(f"[kalshi-pm-analyzer] ERROR: Excel export failed: {e}", file=sys.stderr)
+        try:
+            from pipeline_run_log import RunLog
+            rl = RunLog.for_current_run()
+            if rl:
+                rl.step_error("Step 5 — Finalize (Excel export)", str(e))
+        except Exception:
+            pass
+        raise
 
     _archive_run(result_path, run_path, run_dir)
 
@@ -638,25 +663,25 @@ After ALL research batches and retries are complete:
   Save to BOTH:
        cache/classified.json
        logs/{run_dir}/classified.json
-""") + f"""
-After saving classified.json, write the classification summary to the run log:
-  python3 -c "
-  from pipeline_run_log import RunLog
-  import json
-  results = json.loads(open('cache/classified.json').read())
-  counts = {{'CERTAIN': 0, 'LIKELY': 0, 'UNCLEAR': 0}}
-  n_failed, n_empty, issues = 0, 0, []
-  for r in results:
-      cl = r.get('classification', r) if isinstance(r.get('classification'), dict) else r
-      c = counts.get(cl.get('classification', ''))
-      if c is not None: counts[cl.get('classification')] += 1
-      if not cl.get('_valid', True): n_failed += 1; issues.append(r.get('candidate',r).get('ticker','?') + ': validation failed')
-      if cl.get('classification') == 'UNCLEAR' and 'Research was not performed' in str(cl.get('reasons','')): n_empty += 1
-  log = RunLog.for_current_run()
-  if log:
-      log.step_classification(len(results), counts['CERTAIN'], counts['LIKELY'], counts['UNCLEAR'], n_failed, n_empty, issues[:10])
-  "
 
+  Then write the classification summary to the run log:
+    python3 -c "
+    from pipeline_run_log import RunLog
+    import json
+    results = json.loads(open('cache/classified.json').read())
+    counts = {{'CERTAIN': 0, 'LIKELY': 0, 'UNCLEAR': 0}}
+    n_failed, n_empty, issues = 0, 0, []
+    for r in results:
+        cl = r.get('classification', r) if isinstance(r.get('classification'), dict) else r
+        c = counts.get(cl.get('classification', ''))
+        if c is not None: counts[cl.get('classification')] += 1
+        if not cl.get('_valid', True): n_failed += 1; issues.append(r.get('candidate',r).get('ticker','?') + ': validation failed')
+        if cl.get('classification') == 'UNCLEAR' and 'Research was not performed' in str(cl.get('reasons','')): n_empty += 1
+    log = RunLog.for_current_run()
+    if log:
+        log.step_classification(len(results), counts['CERTAIN'], counts['LIKELY'], counts['UNCLEAR'], n_failed, n_empty, issues[:10])
+    "
+""") + f"""
 PROHIBITED — stop and ask user before doing any of the following:
   - Writing a Python file with classification results hardcoded per ticker
   - Reasoning about all tickers in one in-context pass and saving as constants
@@ -732,15 +757,28 @@ def main() -> None:
     run_path, run_dir = _init_run(mode)
 
     print(f"[kalshi-pm-analyzer] Running {mode} scan...")
-    if mode == "anomaly":
-        candidates = run_anomaly_scan()
-        cand_file = ANOMALY_CANDIDATES_FILE
-    elif mode.startswith("pm-"):
-        candidates = run_pm_scan(mode)
-        cand_file = PM_CANDIDATES_FILE
-    else:
-        candidates = run_price_scan(mode)
-        cand_file = CANDIDATES_FILE
+    try:
+        if mode == "anomaly":
+            candidates = run_anomaly_scan()
+            cand_file = ANOMALY_CANDIDATES_FILE
+        elif mode.startswith("pm-"):
+            candidates = run_pm_scan(mode)
+            cand_file = PM_CANDIDATES_FILE
+        else:
+            candidates = run_price_scan(mode)
+            cand_file = CANDIDATES_FILE
+    except Exception as e:
+        import traceback
+        msg = f"Scan failed ({mode}): {e}\n{traceback.format_exc()}"
+        print(f"[kalshi-pm-analyzer] ERROR: {msg}", file=sys.stderr)
+        try:
+            from pipeline_run_log import RunLog
+            log = RunLog.for_current_run()
+            if log:
+                log.step_error(f"Step 1 — Scan ({mode})", msg)
+        except Exception:
+            pass
+        sys.exit(1)
 
     scan_duration = time.time() - t0
     print(f"[kalshi-pm-analyzer] Scanner found {len(candidates)} candidates")
