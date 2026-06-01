@@ -56,10 +56,16 @@ def verify_certain_classification(entry):
     what = cl.get('what_would_change_this', '')
     
     # Check 1: If the claim is structural (company acquired, etc.), verify ticker name
-    # Brex acquired → check ticker has BREX in name
+    # Brex acquired -> check ticker has BREX in name
     for sig in signals:
-        fact = sig.get('fact', '')
-        url = sig.get('source_url', '')
+        if isinstance(sig, dict):
+            fact = sig.get('fact', '')
+            url = sig.get('source_url', '')
+        elif isinstance(sig, str):
+            fact = sig
+            url = ''
+        else:
+            continue
         
         # Check for hallucination patterns
         for pat in HALLUCINATION_PATTERNS:

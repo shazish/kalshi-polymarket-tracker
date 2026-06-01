@@ -138,19 +138,19 @@ remaining = [c for c in all_candidates if c["ticker"] not in done]
 clf = Classifier()
 
 # ── Banner ────────────────────────────────────────────────────────────────────
-print(SEP)
-print("PHASE 2 — CLASSIFICATION")
-print(SEP)
-print(f"  Model    : {clf.model}")
-print(f"  Batches  : {len(batch_files)} research file(s) — {len(research_index)} tickers indexed")
-print(f"  Candidates: {len(all_candidates)} total | {len(done)} already done | {len(remaining)} remaining")
-print(f"  Output   : {CLASSIFIED_FILE}")
+print(SEP, flush=True)
+print("PHASE 2 — CLASSIFICATION", flush=True)
+print(SEP, flush=True)
+print(f"  Model    : {clf.model}", flush=True)
+print(f"  Batches  : {len(batch_files)} research file(s) — {len(research_index)} tickers indexed", flush=True)
+print(f"  Candidates: {len(all_candidates)} total | {len(done)} already done | {len(remaining)} remaining", flush=True)
+print(f"  Output   : {CLASSIFIED_FILE}", flush=True)
 if LOG_CLASSIFIED:
-    print(f"  Mirror   : {LOG_CLASSIFIED}")
-    print(f"  Run log  : {REPO / 'logs' / run_dir / 'pipeline_run.md'}" if run_dir else "")
+    print(f"  Mirror   : {LOG_CLASSIFIED}", flush=True)
+    print(f"  Run log  : {REPO / 'logs' / run_dir / 'pipeline_run.md'}" if run_dir else "", flush=True)
 else:
-    print("  Mirror   : (none — pass --run-dir or ensure logs/.current_run exists)")
-print(SEP)
+    print("  Mirror   : (none — pass --run-dir or ensure logs/.current_run exists)", flush=True)
+print(SEP, flush=True)
 
 if not remaining:
     print("[classify_all] all candidates already classified — nothing to do")
@@ -194,7 +194,7 @@ try:
                 research = (filtered or {}).get("research", raw)
             except Exception as fe:
                 warn = f"filter_research_entry failed: {fe!s:.100}"
-                print(f"  WARN  {ticker}: {warn}")
+                print(f"  WARN  {ticker}: {warn}", flush=True)
                 ticker_issues.append(f"{ticker}: {warn}")
                 research = raw
         else:
@@ -212,23 +212,23 @@ try:
                 last_err = str(e)
                 if any(x in last_err for x in ("403", "429", "Forbidden", "rate limit")):
                     wait = min(60, 5 * 2 ** attempt)
-                    print(f"  RATE LIMIT  {ticker} attempt {attempt+1}/5, wait {wait}s — {last_err[:80]}")
+                    print(f"  RATE LIMIT  {ticker} attempt {attempt+1}/5, wait {wait}s — {last_err[:80]}", flush=True)
                     time.sleep(wait)
                 elif any(x in last_err for x in ("timeout", "timed out", "Timeout", "TimeoutError")):
                     wait = min(60, 10 * 2 ** attempt)
-                    print(f"  TIMEOUT     {ticker} attempt {attempt+1}/5, wait {wait}s")
+                    print(f"  TIMEOUT     {ticker} attempt {attempt+1}/5, wait {wait}s", flush=True)
                     time.sleep(wait)
                 elif any(x in last_err for x in ("500", "502", "503", "504")):
-                    print(f"  SERVER ERR  {ticker} attempt {attempt+1}/5, wait 15s — {last_err[:80]}")
+                    print(f"  SERVER ERR  {ticker} attempt {attempt+1}/5, wait 15s — {last_err[:80]}", flush=True)
                     time.sleep(15)
                 else:
-                    print(f"  ERROR       {ticker} attempt {attempt+1}/5 (not retrying): {last_err[:120]}")
+                    print(f"  ERROR       {ticker} attempt {attempt+1}/5 (not retrying): {last_err[:120]}", flush=True)
                     break
 
         if classification is None:
             n_err += 1
             issue = f"{ticker}: API failed after {5} attempts — {last_err[:120]}"
-            print(f"  FAILED      {ticker} — saving as UNCLEAR  (API errors total: {n_err})")
+            print(f"  FAILED      {ticker} — saving as UNCLEAR  (API errors total: {n_err})", flush=True)
             ticker_issues.append(issue)
             classification = {
                 "classification": "UNCLEAR",
@@ -249,7 +249,7 @@ try:
             n_valid_fail += 1
             errs = "; ".join(classification.get("_validation_errors", []))
             issue = f"{ticker}: validation failed — {errs[:100]}"
-            print(f"  INVALID     {ticker}: {errs[:80]}")
+            print(f"  INVALID     {ticker}: {errs[:80]}", flush=True)
             ticker_issues.append(issue)
 
         entry = make_classified_entry(copy.deepcopy(candidate), copy.deepcopy(classification))
@@ -267,7 +267,8 @@ try:
             f"  [{len(results):>3}/{total}] {ticker[:38]:<38} "
             f"{clf_label:<7} {conf:>3}%  res={has_res}  "
             f"CERTAIN:{n_certain}  ERR:{n_err}  "
-            f"{elapsed:>5.0f}s  ETA:{eta:>5.0f}s"
+            f"{elapsed:>5.0f}s  ETA:{eta:>5.0f}s",
+            flush=True,
         )
 
 except Exception as fatal:

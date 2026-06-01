@@ -457,6 +457,10 @@ Step 1 (scan) is done. Batch files are pre-written and ready.
 YOU (the LLM agent) must now complete Steps 2-5 IN ORDER.
 Do NOT skip steps. Do NOT parallelize research batches. Do NOT hardcode results.
 
+TEMP SCRIPTS: If you need to write a temporary .py file during this pipeline run,
+write it to tmp/ (e.g. tmp/my_script.py), NOT to scripts/. The tmp/ folder is
+gitignored and is cleared between runs. scripts/ contains permanent pipeline code only.
+
 {sep}
 STEP 2 — RESEARCH  ({len(batches)} sequential subagents)
 {sep}

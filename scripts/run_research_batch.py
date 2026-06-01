@@ -121,8 +121,7 @@ for i, entry in enumerate(data):
     entry['research'] = {'searches_performed': searches, 'findings': findings[:6],
         'summary': summary, 'search_status': status}
 
-    if (i+1) % 10 == 0:
-        print(f"  {i+1}/{len(data)} ok={ok_count} empty={empty_count}", flush=True)
+    print(f"  [{i+1}/{len(data)}] {ticker:<40} ok={ok_count} empty={empty_count}", flush=True)
 
 batch_path.write_text(json.dumps(data, indent=2))
 run_dir.mkdir(parents=True, exist_ok=True)

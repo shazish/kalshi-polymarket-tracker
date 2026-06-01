@@ -168,7 +168,15 @@ def _anomaly_str(anomaly):
 def _contra_str(signals):
     if not signals:
         return ""
-    return " | ".join(s.get("fact", "") for s in signals if s.get("fact"))
+    parts = []
+    for s in signals:
+        if isinstance(s, dict):
+            fact = s.get("fact", "")
+        else:
+            fact = str(s)
+        if fact:
+            parts.append(fact)
+    return " | ".join(parts)
 
 
 def _row_fill(cls):

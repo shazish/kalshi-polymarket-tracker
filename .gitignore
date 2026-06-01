@@ -36,3 +36,6 @@ kalshi-video/final.mp4
 # Plans (not part of the project)
 plans/
 .claude/settings.local.json
+
+# Temporary scripts created by agents during pipeline runs
+tmp/
