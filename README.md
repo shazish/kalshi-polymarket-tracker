@@ -2,7 +2,7 @@
 
 > *Some markets are already decided. Find them.*
 
-<img width="612" height="492" alt="pythia" src="https://github.com/user-attachments/assets/af166e22-c09e-4c18-8b1d-67a84dee540c" />
+<img src="./assets/pythia-logo.svg" width="480" alt="Pythia" />
 
 Multi-agent pipeline that hunts mispriced certainties on [Kalshi](https://kalshi.com) and [Polymarket](https://polymarket.com). Scans thousands of markets, researches each candidate with live web search, classifies outcomes as CERTAIN / LIKELY / UNCLEAR via LLM reasoning, verifies source integrity, and surfaces actionable opportunities.
 
