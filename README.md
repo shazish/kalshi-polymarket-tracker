@@ -1,4 +1,5 @@
 # Kalshi/Polymarket Tracker
+<img width="612" height="492" alt="kpmn" src="https://github.com/user-attachments/assets/af166e22-c09e-4c18-8b1d-67a84dee540c" />
 
 Multi-agent pipeline for finding high-certainty opportunities on [Kalshi](https://kalshi.com) and [Polymarket](https://polymarket.com) prediction markets.
 
