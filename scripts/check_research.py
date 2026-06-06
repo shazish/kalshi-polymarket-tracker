@@ -10,14 +10,27 @@ Usage:
     python3 scripts/check_research.py cache/research_batchN.json
 """
 import json
+import os
 import sys
 from pathlib import Path
 
 CONSECUTIVE_FAIL_THRESHOLD = 3
 RETRY_CHUNK_SIZE = 15   # keep below observed ~17-search per-session limit
 REPO = Path(__file__).parent.parent
-RETRY_PATH = REPO / "cache" / "research_retry.json"
-RETRY_CHUNKS_PATH = REPO / "cache" / "research_retry_chunks.json"
+
+def _run_cache() -> Path:
+    if "KALSHI_CACHE_DIR" in os.environ:
+        return Path(os.environ["KALSHI_CACHE_DIR"])
+    crfile = REPO / "logs" / ".current_run"
+    if crfile.exists():
+        run_dir = crfile.read_text().strip()
+        run_path = REPO / "logs" / run_dir
+        if run_path.is_dir():
+            return run_path
+    return REPO / "cache"
+
+RETRY_PATH = _run_cache() / "research_retry.json"
+RETRY_CHUNKS_PATH = _run_cache() / "research_retry_chunks.json"
 
 
 def check_batch(batch_path: Path) -> dict:

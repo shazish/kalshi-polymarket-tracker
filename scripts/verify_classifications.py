@@ -11,6 +11,18 @@ from classifier import validate_classification
 KALSHI_DIR = '/home/shaah/kalshi-tracker'
 CURRENT_RUN_POINTER = os.path.join(KALSHI_DIR, 'logs', '.current_run')
 
+def _run_cache() -> str:
+    if "KALSHI_CACHE_DIR" in os.environ:
+        return os.environ["KALSHI_CACHE_DIR"]
+    crfile = os.path.join(KALSHI_DIR, "logs", ".current_run")
+    if os.path.exists(crfile):
+        with open(crfile) as f:
+            run_dir = f.read().strip()
+        run_path = os.path.join(KALSHI_DIR, "logs", run_dir)
+        if os.path.isdir(run_path):
+            return run_path
+    return os.path.join(KALSHI_DIR, "cache")
+
 
 def _get_run_path():
     if not os.path.exists(CURRENT_RUN_POINTER):
@@ -98,7 +110,7 @@ def verify_certain_classification(entry):
 
 def main():
     # Load the merged classified.json (already normalized)
-    with open('/home/shaah/kalshi-tracker/cache/classified.json') as f:
+    with open(os.path.join(_run_cache(), 'classified.json')) as f:
         results = json.load(f)
 
     print(f"Verifying {len(results)} classifications...")
@@ -153,16 +165,18 @@ def main():
                 print(f"🟢 {ticker}: passed verification")
 
     # Save verified results back to cache (atomic write)
-    classified_cache = '/home/shaah/kalshi-tracker/cache/classified.json'
+    classified_cache = os.path.join(_run_cache(), 'classified.json')
     tmp = classified_cache + '.tmp'
     with open(tmp, 'w') as f:
         json.dump(results, f, indent=2)
     os.replace(tmp, classified_cache)
 
-    # Mirror to run folder if one is active
+    # Mirror to run folder if cache is not already inside run folder
     run_path = _get_run_path()
     if run_path:
-        shutil.copy2(classified_cache, os.path.join(run_path, 'classified.json'))
+        mirror = os.path.join(run_path, 'classified.json')
+        if os.path.realpath(classified_cache) != os.path.realpath(mirror):
+            shutil.copy2(classified_cache, mirror)
 
     n_certain_after = n_certain_before - downgrades
     print(f"\nVerification complete: {downgrades} downgraded, {n_certain_after} CERTAIN remaining")

@@ -38,13 +38,26 @@ sys.path.insert(0, SKILL_DIR)
 
 RECENCY_DAYS = int(os.environ.get("KALSHI_RECENCY_DAYS", 14))
 
-CANDIDATES_FILE      = str(REPO / "cache" / "candidates.json")
-ANOMALY_CANDIDATES_FILE = str(REPO / "cache" / "anomaly_candidates.json")
-CLASSIFIED_FILE      = str(REPO / "cache" / "classified.json")
-PM_CANDIDATES_FILE   = str(REPO / "cache" / "pm_candidates.json")
-LOGS_DIR             = str(REPO / "logs")
-CURRENT_RUN_POINTER  = str(REPO / "logs" / ".current_run")
+LOGS_DIR            = str(REPO / "logs")
+CURRENT_RUN_POINTER = str(REPO / "logs" / ".current_run")
 
+
+def _run_cache() -> Path:
+    """Return the active run's cache directory.
+    Priority: KALSHI_CACHE_DIR env var → logs/.current_run → REPO/cache (legacy fallback).
+    """
+    if "KALSHI_CACHE_DIR" in os.environ:
+        return Path(os.environ["KALSHI_CACHE_DIR"])
+    crfile = REPO / "logs" / ".current_run"
+    if crfile.exists():
+        run_dir = crfile.read_text().strip()
+        run_path = REPO / "logs" / run_dir
+        if run_path.is_dir():
+            return run_path
+    return REPO / "cache"
+
+
+# Persistent market-data caches — always live in REPO/cache, never in run folder
 SCANNER_CONFIG = {
     "price_threshold": 85,
     "deep_scan_threshold": 80,
@@ -52,7 +65,7 @@ SCANNER_CONFIG = {
     "min_volume": 50,
     "deep_spread_min_volume": 200,
     "price_change_threshold": 3,
-    "candidates_file": CANDIDATES_FILE,
+    "candidates_file": str(REPO / "cache" / "candidates.json"),        # updated in _init_run
     "cache_file": str(REPO / "cache" / "market_cache.json"),
 }
 
@@ -62,7 +75,7 @@ ANOMALY_CONFIG = {
     "min_implied_hc_dollars": 10000,
     "min_volume": 500,
     "min_hc_ratio": 1.5,
-    "candidates_file": ANOMALY_CANDIDATES_FILE,
+    "candidates_file": str(REPO / "cache" / "anomaly_candidates.json"), # updated in _init_run
     "cache_file": str(REPO / "cache" / "anomaly_cache.json"),
 }
 
@@ -74,24 +87,22 @@ PM_SCANNER_CONFIG = {
     "anomaly_min_price":      20,
     "anomaly_max_price":      79,
     "min_implied_hc_dollars": 10000,
-    "candidates_file":        PM_CANDIDATES_FILE,
+    "candidates_file":        str(REPO / "cache" / "pm_candidates.json"), # updated in _init_run
     "cache_file":             str(REPO / "cache" / "pm_cache.json"),
 }
 
 _CANDIDATES_MAP = {
-    "anomaly":        "cache/anomaly_candidates.json",
-    "pm-incremental": "cache/pm_candidates.json",
-    "pm-full":        "cache/pm_candidates.json",
-    "pm-deep":        "cache/pm_candidates.json",
-    "pm-anomaly":     "cache/pm_candidates.json",
+    "anomaly":        "anomaly_candidates.json",
+    "pm-incremental": "pm_candidates.json",
+    "pm-full":        "pm_candidates.json",
+    "pm-deep":        "pm_candidates.json",
+    "pm-anomaly":     "pm_candidates.json",
 }
 
 VALID_MODES = [
     "incremental", "full", "deep", "anomaly",
     "pm-incremental", "pm-full", "pm-deep", "pm-anomaly",
 ]
-
-_CACHE_DIR = str(REPO / "cache")
 
 _PERSISTENT_CACHE = {
     "market_cache.json",
@@ -162,13 +173,15 @@ def make_classified_entry(candidate: dict, classification: dict) -> dict:
 # ── Cache management ──────────────────────────────────────────────────────────
 
 def _clean_cache():
-    if not os.path.isdir(_CACHE_DIR):
+    """Remove stale run artifacts from REPO/cache (the legacy shared cache)."""
+    legacy = str(REPO / "cache")
+    if not os.path.isdir(legacy):
         return
     deleted = []
-    for name in os.listdir(_CACHE_DIR):
+    for name in os.listdir(legacy):
         if name in _PERSISTENT_CACHE:
             continue
-        path = os.path.join(_CACHE_DIR, name)
+        path = os.path.join(legacy, name)
         if os.path.isfile(path):
             os.remove(path)
             deleted.append(name)
@@ -179,12 +192,20 @@ def _clean_cache():
 # ── Run-folder management ─────────────────────────────────────────────────────
 
 def _init_run(mode):
-    _clean_cache()
     _guard_against_hardcoded_classifications()
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M")
     run_dir = f"{ts}_{mode}"
     run_path = os.path.join(LOGS_DIR, run_dir)
     os.makedirs(run_path, exist_ok=True)
+
+    # Point all pipeline scripts to this run's folder as their cache dir
+    os.environ["KALSHI_CACHE_DIR"] = run_path
+
+    # Update scanner configs so candidates land in the run folder (not legacy cache/)
+    SCANNER_CONFIG["candidates_file"]    = str(_run_cache() / "candidates.json")
+    ANOMALY_CONFIG["candidates_file"]    = str(_run_cache() / "anomaly_candidates.json")
+    PM_SCANNER_CONFIG["candidates_file"] = str(_run_cache() / "pm_candidates.json")
+
     with open(CURRENT_RUN_POINTER, "w") as f:
         f.write(run_dir)
     print(f"[kalshi-pm-analyzer] Run folder: logs/{run_dir}/")
@@ -253,26 +274,34 @@ def run_pm_scan(mode):
 
 # ── Archive ───────────────────────────────────────────────────────────────────
 
-def _archive_run(excel_path, run_path, run_dir):
+def _archive_run(excel_path, run_path, run_dir, cache_dir: Path = None):
+    if cache_dir is None:
+        cache_dir = _run_cache()
+    # When KALSHI_CACHE_DIR == run_path, artifacts are already there — skip copy
+    already_in_run = os.path.realpath(str(cache_dir)) == os.path.realpath(run_path)
     copied = 0
-    for name in _RUN_ARTIFACTS:
-        src = os.path.join(SKILL_DIR, "cache", name)
-        if os.path.exists(src):
-            dst = os.path.join(run_path, name)
-            if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
-                shutil.copy2(src, dst)
-                copied += 1
-    for pattern in _RUN_ARTIFACT_GLOBS:
-        for src in sorted(glob.glob(os.path.join(SKILL_DIR, "cache", pattern))):
-            dst = os.path.join(run_path, os.path.basename(src))
-            if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
-                shutil.copy2(src, dst)
-                copied += 1
+    if not already_in_run:
+        for name in _RUN_ARTIFACTS:
+            src = str(cache_dir / name)
+            if os.path.exists(src):
+                dst = os.path.join(run_path, name)
+                if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
+                    shutil.copy2(src, dst)
+                    copied += 1
+        for pattern in _RUN_ARTIFACT_GLOBS:
+            for src in sorted(glob.glob(str(cache_dir / pattern))):
+                dst = os.path.join(run_path, os.path.basename(src))
+                if not os.path.exists(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
+                    shutil.copy2(src, dst)
+                    copied += 1
     excel_basename = os.path.basename(excel_path)
     excel_in_run = os.path.join(run_path, excel_basename)
     if excel_path != excel_in_run and os.path.exists(excel_path):
         shutil.move(excel_path, excel_in_run)
-    print(f"[kalshi-pm-analyzer] Archived run → logs/{run_dir}/  ({copied} cache artifacts + Excel)")
+    if already_in_run:
+        print(f"[kalshi-pm-analyzer] Archived run → logs/{run_dir}/  (artifacts already in run folder + Excel)")
+    else:
+        print(f"[kalshi-pm-analyzer] Archived run → logs/{run_dir}/  ({copied} cache artifacts + Excel)")
     return run_dir
 
 
@@ -283,13 +312,16 @@ def finalize():
     from classifier import validate_classification
     log = get_logger("kalshi-pm-analyzer")
 
-    if not os.path.exists(CLASSIFIED_FILE):
-        log.error("No classified.json found at %s. Classification step must run first.", CLASSIFIED_FILE)
+    # Snapshot cache dir now — _init_run() (called below as fallback) may change KALSHI_CACHE_DIR
+    _cache_dir = _run_cache()
+    classified_path = str(_cache_dir / "classified.json")
+    if not os.path.exists(classified_path):
+        log.error("No classified.json found at %s. Classification step must run first.", classified_path)
         print("[kalshi-pm-analyzer] No classified.json found. Classification step must run first.")
         sys.exit(1)
 
     try:
-        with open(CLASSIFIED_FILE) as f:
+        with open(classified_path) as f:
             classified = json.load(f)
     except json.JSONDecodeError as e:
         print(f"[kalshi-pm-analyzer] classified.json is malformed — cannot finalize: {e}")
@@ -400,7 +432,7 @@ def finalize():
             pass
         raise
 
-    _archive_run(result_path, run_path, run_dir)
+    _archive_run(result_path, run_path, run_dir, cache_dir=_cache_dir)
 
     try:
         from pipeline_run_log import RunLog
@@ -431,19 +463,15 @@ def finalize():
 # ── Batch writing ─────────────────────────────────────────────────────────────
 
 def _candidates_path(mode: str) -> Path:
-    return REPO / _CANDIDATES_MAP.get(mode, "cache/candidates.json")
+    return _run_cache() / _CANDIDATES_MAP.get(mode, "candidates.json")
 
 
-def _n_batches(n_candidates: int) -> int:
-    if n_candidates <= 15:
-        return 1
-    if n_candidates <= 40:
-        return 2
-    return 3
+def _n_batches(n: int) -> int:
+    return max(2, math.ceil(n / 15))
 
 
 def _write_batches(candidates: list) -> list:
-    """Write raw candidate slices to cache/research_batch{N}.json. Returns [(index, count, path)]."""
+    """Write raw candidate slices to the run cache dir as research_batch{N}.json. Returns [(index, count, path)]."""
     n_batches = _n_batches(len(candidates))
     batch_size = math.ceil(len(candidates) / n_batches)
     written = []
@@ -453,7 +481,7 @@ def _write_batches(candidates: list) -> list:
         batch = candidates[start:end]
         if not batch:
             continue
-        path = REPO / f"cache/research_batch{i}.json"
+        path = _run_cache() / f"research_batch{i}.json"
         path.write_text(json.dumps(batch, indent=2))
         written.append((i, len(batch), path))
     return written
@@ -499,6 +527,12 @@ Each subagent must:
        - Settlement criteria and any other relevant verification
   3. Write the enriched JSON back to THE SAME FILE in-place.
 
+STDOUT DISCIPLINE — minimize output to avoid token limits:
+  - Print ONE line per candidate: "Done: <TICKER>"
+  - Do NOT print search queries, raw results, or findings to stdout.
+  - All research data goes to the JSON file ONLY.
+  - After all candidates: print "Batch complete: <N> candidates written to <file>"
+
 CRITICAL — preserve all original candidate fields. Only ADD the "research" key.
 Do NOT rename, remove, or simplify any existing fields (ticker, title, implied_probability,
 high_confidence_side, days_to_close, volume_anomaly, rules_primary, rules_secondary, etc.).
@@ -523,21 +557,20 @@ Batches:""")
         print(f"  Batch {i + 1}/{len(batches)}: {count} candidates -> {rel}")
 
     print(f"""
-Also copy each finished batch to: logs/{run_dir}/research_batch{{N}}.json
+NOTE: Batch files are written directly to logs/{run_dir}/ — no separate copy needed.
 
 After EACH batch completes, run these three commands IN ORDER:
 
   1. Health check — detect search failures vs genuine empty results:
-       python3 scripts/check_research.py cache/research_batch<N>.json
+       python3 scripts/check_research.py logs/{run_dir}/research_batch<N>.json
      This writes search_status: ok|empty|search_failed to each entry and
-     appends failed entries to cache/research_retry.json.
+     appends failed entries to logs/{run_dir}/research_retry.json.
 
   2. Filter — prune low-quality findings:
        from pathlib import Path
        from research_utils import filter_research_batch
        import json
-       REPO = Path('/home/shaah/kalshi-tracker')
-       batch_path = REPO / 'cache' / 'research_batch<N>.json'
+       batch_path = Path('logs/{run_dir}/research_batch<N>.json')
        data = json.loads(batch_path.read_text())
        market_info = {{e["ticker"]: {{"title": e.get("title",""), "rules": e.get("rules_primary","")}} for e in data}}
        filtered = filter_research_batch(data, market_info)
@@ -561,14 +594,14 @@ After ALL batches finish, run:
   python3 -c "from pipeline_run_log import RunLog; log = RunLog.for_current_run(); log and log.step_research_complete()"
 
 {sep}
-STEP 2.5 — RETRY FAILED SEARCHES  (skip if cache/research_retry.json absent or empty)
+STEP 2.5 — RETRY FAILED SEARCHES  (skip if logs/{run_dir}/research_retry.json absent or empty)
 {sep}
 
   python3 -c "
   import json
   from pathlib import Path
-  p = Path('cache/research_retry.json')
-  cp = Path('cache/research_retry_chunks.json')
+  p = Path('logs/{run_dir}/research_retry.json')
+  cp = Path('logs/{run_dir}/research_retry_chunks.json')
   q = json.loads(p.read_text()) if p.exists() else []
   chunks = json.loads(cp.read_text()) if cp.exists() else []
   print(f'Retry queue: {{len(q)}} entries in {{len(chunks)}} chunk(s)')
@@ -576,7 +609,7 @@ STEP 2.5 — RETRY FAILED SEARCHES  (skip if cache/research_retry.json absent or
       print(f'  Chunk {{i}}: {{len(chunk)}} entries')
   "
 
-If retry queue is non-empty, read cache/research_retry_chunks.json.
+If retry queue is non-empty, read logs/{run_dir}/research_retry_chunks.json.
 Spawn ONE subagent per chunk, SEQUENTIALLY (wait for each before starting the next).
 Each chunk subagent must follow this protocol EXACTLY:
 
@@ -616,16 +649,15 @@ Each chunk subagent must follow this protocol EXACTLY:
 
   ── AFTER EACH CHUNK ──
 
-  Update the original batch file (cache/research_batch<N>.json) in-place.
+  Update the original batch file (logs/{run_dir}/research_batch<N>.json) in-place.
   Run health check on each updated batch:
-    python3 scripts/check_research.py cache/research_batch<N>.json
-  Copy updated batch to: logs/{run_dir}/research_batch<N>.json
+    python3 scripts/check_research.py logs/{run_dir}/research_batch<N>.json
 
 After ALL chunks complete (or are skipped), clean up:
   python3 -c "
   from pathlib import Path
-  Path('cache/research_retry.json').unlink(missing_ok=True)
-  Path('cache/research_retry_chunks.json').unlink(missing_ok=True)
+  Path('logs/{run_dir}/research_retry.json').unlink(missing_ok=True)
+  Path('logs/{run_dir}/research_retry_chunks.json').unlink(missing_ok=True)
   print('Retry queue cleared')
   "
 
@@ -655,8 +687,7 @@ After ALL research batches and retries are complete:
   for ~150 candidates. Wait for it to complete before proceeding to Step 4.
 
   Results saved to:
-    cache/classified.json
-    logs/{run_dir}/classified.json
+    logs/{run_dir}/classified.json  (KALSHI_CACHE_DIR is set to this folder)
 """ if model_override else f"""
 After ALL research batches and retries are complete:
 
@@ -688,15 +719,14 @@ After ALL research batches and retries are complete:
 
   Collect all results into a list in this format:
        {{"candidate": <original candidate dict>, "classification": <validated classification dict>}}
-  Save to BOTH:
-       cache/classified.json
-       logs/{run_dir}/classified.json
+  Save to:
+       logs/{run_dir}/classified.json  (KALSHI_CACHE_DIR is set to this folder)
 
   Then write the classification summary to the run log:
     python3 -c "
     from pipeline_run_log import RunLog
     import json
-    results = json.loads(open('cache/classified.json').read())
+    results = json.loads(open('logs/{run_dir}/classified.json').read())
     counts = {{'CERTAIN': 0, 'LIKELY': 0, 'UNCLEAR': 0}}
     n_failed, n_empty, issues = 0, 0, []
     for r in results:
@@ -826,13 +856,11 @@ def main() -> None:
     try:
         if mode == "anomaly":
             candidates = run_anomaly_scan()
-            cand_file = ANOMALY_CANDIDATES_FILE
         elif mode.startswith("pm-"):
             candidates = run_pm_scan(mode)
-            cand_file = PM_CANDIDATES_FILE
         else:
             candidates = run_price_scan(mode)
-            cand_file = CANDIDATES_FILE
+        cand_file = str(_candidates_path(mode))
     except Exception as e:
         import traceback
         msg = f"Scan failed ({mode}): {e}\n{traceback.format_exc()}"
@@ -857,7 +885,7 @@ def main() -> None:
 
     # Pre-write batch files so subagents have input ready
     batches = _write_batches(candidates)
-    print(f"[kalshi-pm-analyzer] Wrote {len(batches)} batch file(s) to cache/")
+    print(f"[kalshi-pm-analyzer] Wrote {len(batches)} batch file(s) to logs/{run_dir}/")
 
     # Write run log header + step 1
     try:

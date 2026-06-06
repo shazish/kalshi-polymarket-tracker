@@ -27,6 +27,21 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 os.chdir(REPO)
 
+def _run_cache() -> Path:
+    """Return the active run's cache directory.
+    Priority: KALSHI_CACHE_DIR env var → logs/.current_run → REPO/cache (legacy fallback).
+    Call _set_run_cache_from_run_dir() before using this if --run-dir was passed.
+    """
+    if "KALSHI_CACHE_DIR" in os.environ:
+        return Path(os.environ["KALSHI_CACHE_DIR"])
+    crfile = REPO / "logs" / ".current_run"
+    if crfile.exists():
+        run_dir = crfile.read_text().strip()
+        run_path = REPO / "logs" / run_dir
+        if run_path.is_dir():
+            return run_path
+    return REPO / "cache"
+
 SEP = "=" * 60
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
@@ -76,9 +91,19 @@ if not run_dir:
     if crfile.exists():
         run_dir = crfile.read_text().strip()
 
-CLASSIFIED_FILE = REPO / "cache" / "classified.json"
+# If --run-dir explicitly given, anchor KALSHI_CACHE_DIR to that folder so all
+# reads/writes (batches, classified, lock) target the correct past session.
+if args.run_dir and "KALSHI_CACHE_DIR" not in os.environ:
+    explicit_run_path = REPO / "logs" / args.run_dir
+    if explicit_run_path.is_dir():
+        os.environ["KALSHI_CACHE_DIR"] = str(explicit_run_path)
+
+CLASSIFIED_FILE = _run_cache() / "classified.json"
 LOG_CLASSIFIED  = (REPO / "logs" / run_dir / "classified.json") if run_dir else None
-LOCK_FILE       = REPO / "cache" / "classify_all.lock"
+LOCK_FILE       = _run_cache() / "classify_all.lock"
+# When KALSHI_CACHE_DIR points to the run folder itself, LOG_CLASSIFIED == CLASSIFIED_FILE
+if LOG_CLASSIFIED and LOG_CLASSIFIED.resolve() == CLASSIFIED_FILE.resolve():
+    LOG_CLASSIFIED = None
 
 # ── Lockfile: abort if another instance is already running ────────────────────
 if LOCK_FILE.exists():
@@ -113,14 +138,14 @@ def _log_error(run_log, step: str, msg: str) -> None:
 # ── Load candidates (full data) ───────────────────────────────────────────────
 all_candidates: list[dict] = []
 for fname in ("candidates.json", "anomaly_candidates.json"):
-    p = REPO / "cache" / fname
+    p = _run_cache() / fname
     if p.exists():
         with open(p) as f:
             all_candidates.extend(json.load(f))
 
 if not all_candidates:
     run_log = _get_run_log()
-    _log_error(run_log, "Phase 2 — Classification", "no candidates found in cache/")
+    _log_error(run_log, "Phase 2 — Classification", f"no candidates found in {_run_cache()}")
     sys.exit(1)
 
 # ── Build research index ticker → research dict ───────────────────────────────
@@ -128,7 +153,7 @@ if not all_candidates:
 _BATCH_RE = re.compile(r"^research_batch\d+\.json$")
 research_index: dict[str, dict] = {}
 batch_files = sorted(
-    p for p in glob.glob(str(REPO / "cache" / "research_batch*.json"))
+    p for p in glob.glob(str(_run_cache() / "research_batch*.json"))
     if _BATCH_RE.match(Path(p).name)
 )
 for bp in batch_files:
