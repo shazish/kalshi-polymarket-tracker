@@ -301,7 +301,8 @@ class OpportunityManager:
         c = opportunity.get("candidate", {})
         cl = opportunity.get("classification", {})
         side = cl.get("high_confidence_side", "?")
-        prob = c.get("implied_probability", 0)
+        bid_c = c.get("implied_probability", 0)
+        ask_c = round((opportunity.get("exec_price") or 0) * 100)
         edge_pct = opportunity.get("edge_after_fees", 0) * 100
         size = opportunity.get("position_size_usd", 0)
         days = opportunity.get("days_to_close")
@@ -319,7 +320,7 @@ class OpportunityManager:
             platform_tag += " ⚠ requires USDC wallet on Polygon"
 
         lines = [
-            f"{platform_tag.upper()} OPPORTUNITY: {side} @ {prob}c",
+            f"{platform_tag.upper()} OPPORTUNITY: {side} @ {ask_c}c ask  (bid {bid_c}c)",
             f"Title: {c.get('title', 'N/A')}",
             f"Ticker: {c.get('ticker', 'N/A')}",
             f"Edge after fees: {edge_str}",
