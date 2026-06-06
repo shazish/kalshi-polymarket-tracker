@@ -40,3 +40,5 @@ plans/
 
 # Temporary scripts created by agents during pipeline runs
 tmp/
+research_batch*.py
+do_search.py
