@@ -74,61 +74,65 @@ class OpportunityManager:
 
     # ── Edge calculation ───────────────────────────────────────────
 
+    @staticmethod
+    def _exec_price(candidate, side) -> float:
+        """Taker execution price in [0,1]: yes_ask for YES bets, no_ask for NO bets.
+        Falls back to implied_probability (bid) if ask is missing."""
+        if side == "YES":
+            raw = candidate.get("yes_ask") or candidate.get("implied_probability") or 0
+        else:
+            raw = candidate.get("no_ask") or candidate.get("implied_probability") or 0
+        return float(raw) / 100.0
+
     def compute_edge(self, classified_market):
         """
-        Compute expected edge after fees for a CERTAIN classification.
+        Compute taker edge after fees for a CERTAIN classification.
 
-        Fee models differ by platform:
-        - Kalshi: profit-based fee. Fee = (1 - market_price) * fee_rate
-          net_profit_on_win = (1 - market_price) * (1 - fee_rate)
-        - Polymarket: volume-based fee. Fee = market_price * fee_rate (charged on cost of entry)
-          net_profit_on_win = (1 - market_price) - market_price * fee_rate
-          loss_on_lose = market_price + market_price * fee_rate (you lose your stake + fee)
+        Uses the ask price (taker execution price), not the bid.
+        For YES bets: exec_price = yes_ask / 100
+        For NO bets:  exec_price = no_ask / 100
 
-        Returns edge as a decimal fraction of cost (e.g. 0.05 = 5%).
+        Fee models:
+        - Kalshi: profit-based. Fee = (1 - exec_price) * fee_rate
+        - Polymarket: volume-based. Fee = exec_price * fee_rate (on cost of entry)
+
+        Returns edge as decimal fraction of cost (e.g. 0.05 = 5%).
+        Negative edge means no taker opportunity.
         """
         candidate = classified_market.get("candidate", {})
         classification = classified_market.get("classification", {})
-        market_price = candidate.get("implied_probability", 0) / 100.0
+        side = classification.get("high_confidence_side",
+               candidate.get("high_confidence_side", "YES"))
+        exec_price = self._exec_price(candidate, side)
         true_prob = classification.get("confidence_score", 95) / 100.0
 
-        if market_price <= 0:
+        if exec_price <= 0:
             return 0.0
 
-        # Determine platform-specific fee rate
         platform = candidate.get("platform", "Kalshi")
         if platform == "Polymarket":
             category = candidate.get("category", "")
             fee_rate = self.config.get("pm_fee_rates_by_category", {}).get(
                 category, self.config.get("pm_fee_rate", 0.010)
             )
-            # Polymarket: volume-based fee on cost of entry
-            fee_per_share = market_price * fee_rate
-            net_profit_on_win = (1.0 - market_price) - fee_per_share
-            total_loss_on_lose = market_price + fee_per_share
+            fee_per_share = exec_price * fee_rate
+            net_profit_on_win = (1.0 - exec_price) - fee_per_share
+            total_loss_on_lose = exec_price + fee_per_share
             ev = true_prob * net_profit_on_win - (1.0 - true_prob) * total_loss_on_lose
-            # Edge relative to total cost (stake + fee)
-            total_cost = market_price + fee_per_share
+            total_cost = exec_price + fee_per_share
             return ev / total_cost if total_cost > 0 else 0.0
         else:
-            # Kalshi: profit-based fee
             fee_rate = self.config["fee_rate"]
-            profit_on_win = 1.0 - market_price
-            net_profit_on_win = profit_on_win * (1.0 - fee_rate)
-            ev = true_prob * net_profit_on_win - (1.0 - true_prob) * market_price
-            return ev / market_price
+            net_profit_on_win = (1.0 - exec_price) * (1.0 - fee_rate)
+            ev = true_prob * net_profit_on_win - (1.0 - true_prob) * exec_price
+            return ev / exec_price
 
-    def compute_position_size(self, edge, market_price, true_prob, platform="Kalshi", fee_rate=None, category=None):
+    def compute_position_size(self, edge, exec_price, true_prob, platform="Kalshi", fee_rate=None, category=None):
         """
         Kelly criterion with cap.
 
-        For Kalshi: Kelly fraction = EV / net_profit_on_win
-          where net_profit_on_win = (1 - market_price) * (1 - fee_rate)
-          cost_basis = market_price
-
-        For Polymarket: Kelly fraction = EV / net_profit_on_win
-          where net_profit_on_win = (1 - market_price) - market_price * fee_rate
-          cost_basis = market_price + market_price * fee_rate (matches compute_edge denominator)
+        exec_price is the taker ask price (not the bid). Must match the price
+        used in compute_edge() so Kelly fraction correctly recovers EV.
         """
         if fee_rate is None:
             if platform == "Polymarket":
@@ -140,21 +144,16 @@ class OpportunityManager:
                 fee_rate = self.config["fee_rate"]
 
         if platform == "Polymarket":
-            # Volume-based fee
-            fee_per_share = market_price * fee_rate
-            net_profit_on_win = (1.0 - market_price) - fee_per_share
+            fee_per_share = exec_price * fee_rate
+            net_profit_on_win = (1.0 - exec_price) - fee_per_share
+            cost_basis = exec_price + fee_per_share
         else:
-            # Profit-based fee
-            net_profit_on_win = (1.0 - market_price) * (1.0 - fee_rate)
+            net_profit_on_win = (1.0 - exec_price) * (1.0 - fee_rate)
+            cost_basis = exec_price
 
         if net_profit_on_win <= 0:
             return 0.0
 
-        # Use the same cost basis as compute_edge() to correctly recover EV
-        if platform == "Polymarket" and fee_rate:
-            cost_basis = market_price + market_price * fee_rate
-        else:
-            cost_basis = market_price
         kelly = edge * cost_basis / net_profit_on_win
         capped = min(max(kelly, 0.0), self.config["max_bankroll_pct"])
         return round(capped * self.config["default_bankroll"], 2)
@@ -218,12 +217,12 @@ class OpportunityManager:
                 skipped_validation += 1
                 continue
 
-            # Compute edge and sizing
+            # Compute edge and sizing using taker ask price
             edge = self.compute_edge(cm)
-            market_price = candidate.get("implied_probability", 0) / 100.0
+            exec_price = self._exec_price(candidate, side)
+            bid_price = candidate.get("implied_probability", 0) / 100.0  # for display only
             true_prob = classification.get("confidence_score", 95) / 100.0
 
-            # Determine platform and fee rate for position sizing
             platform = candidate.get("platform", "Kalshi")
             category = candidate.get("category", "") if platform == "Polymarket" else None
             if platform == "Polymarket":
@@ -234,7 +233,7 @@ class OpportunityManager:
                 fee_rate_used = self.config["fee_rate"]
 
             position_size = self.compute_position_size(
-                edge, market_price, true_prob,
+                edge, exec_price, true_prob,
                 platform=platform, fee_rate=fee_rate_used, category=category
             )
             days_to_close = self.compute_days_to_close(candidate)
@@ -246,7 +245,8 @@ class OpportunityManager:
                 "annualized_edge": annualized_edge,
                 "days_to_close": days_to_close,
                 "position_size_usd": position_size,
-                "market_price": market_price,
+                "exec_price": exec_price,      # ask price used for edge/sizing
+                "market_price": bid_price,     # bid (display only)
                 "true_prob_used": true_prob,
                 "fee_rate_used": fee_rate_used,
                 "platform": platform,
