@@ -562,6 +562,20 @@ def validate_classification(output, rules: str = "", candidate: dict = None):
             errors.append("recent_developments is empty — recency search was not performed")
             output["classification"] = "LIKELY"
 
+        # Long-horizon + market-uncertainty check: if the market itself prices in
+        # significant uncertainty (< 90c) and there are 90+ days remaining, the
+        # market consensus is a strong prior against CERTAIN. Models routinely
+        # over-CERTAIN "current state is X" markets without discounting for path risk.
+        if candidate:
+            days = candidate.get("days_to_close") or 0
+            mkt_price = candidate.get("implied_probability") or 0
+            if days > 90 and mkt_price < 90:
+                errors.append(
+                    f"Long-horizon market ({days}d to close, market at {mkt_price}c) classified CERTAIN — "
+                    f"market pricing implies real path uncertainty; auto-downgrade to LIKELY"
+                )
+                output["classification"] = "LIKELY"
+
         # Metric consistency check: if settlement rules specify a metric keyword
         # (e.g. "Year-over-Year", "annualized", "quarter-over-quarter"),
         # verify that at least one confirming signal or reason mentions the same metric.

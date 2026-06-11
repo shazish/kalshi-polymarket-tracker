@@ -785,10 +785,25 @@ PROHIBITED — stop and ask user before doing any of the following:
   - Skipping individual per-ticker classification for any reason
 {prohibited_extra}
 {sep}
+{"" if is_anomaly else f"""{sep}
+STEP 3.5 — ADVERSARIAL CHALLENGE  (CERTAIN entries only)
+{sep}
+
+Run after classification is saved, before verify:
+
+  python3 scripts/challenge_certain.py{"" if not model_override else f" --model {model_override}"}
+
+Runs a second adversarial LLM pass on each CERTAIN entry — searches for the
+strongest real-world argument AGAINST the classified outcome. Downgrades to
+LIKELY when a credible challenge (strength >= 70) is found.
+Skipped automatically if no CERTAIN entries exist.
+
+"""}
+{sep}
 STEP 4 — VERIFY
 {sep}
 
-Run after classification is saved:
+Run after step 3.5:
 
   python3 scripts/verify_classifications.py
 
