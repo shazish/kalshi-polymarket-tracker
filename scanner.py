@@ -16,6 +16,7 @@ DEFAULT_CONFIG = {
     "spread_max": 3,                # max bid-ask spread in cents
     "min_volume": 50,               # minimum volume as secondary signal
     "deep_spread_min_volume": 200,  # higher volume floor for wide-spread (spread > spread_max) markets in deep scan
+    "max_ask_price": 95,             # cents — upper ceiling; ask ≥96 can't clear 3% edge after fees
     "price_change_threshold": 3,    # cents — meaningful change vs cache
     "max_pages": 20,                # max event pages per full scan (2,000 events)
     "incremental_max_pages": 5,     # max market pages per incremental scan (500 markets)
@@ -128,6 +129,11 @@ class ScannerAgent:
         if not price_ok:
             return False
 
+        # Upper ask ceiling: skip markets where edge can't clear min threshold after fees
+        hc_ask = yes_ask if yes_bid >= no_bid else no_ask
+        if hc_ask and hc_ask >= self.config["max_ask_price"]:
+            return False
+
         # Liquidity: bid-ask spread on the high-confidence side <= max
         if yes_bid >= no_bid:
             spread = (yes_ask - yes_bid) if yes_ask and yes_bid else 999
@@ -208,6 +214,11 @@ class ScannerAgent:
 
         if not (yes_bid >= self.config["deep_scan_threshold"] or
                 no_bid >= self.config["deep_scan_threshold"]):
+            return False
+
+        # Upper ask ceiling: same as primary — no edge above this price
+        hc_ask = yes_ask if yes_bid >= no_bid else no_ask
+        if hc_ask and hc_ask >= self.config["max_ask_price"]:
             return False
 
         # Spread: more lenient than primary (2× max)
